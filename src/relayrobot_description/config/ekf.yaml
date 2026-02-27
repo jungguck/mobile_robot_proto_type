@@ -1,0 +1,33 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: true
+    publish_tf: true
+
+    # 프레임 설정
+    map_frame: map              # 나중에 SLAM 할 때 필요
+    odom_frame: odom            # 기준 좌표계
+    base_link_frame: base_link  # 로봇 본체 좌표계
+    world_frame: odom           # 현재는 odom 기준
+
+    # 1. 바퀴 오도메트리 설정 (/odom)
+    odom0: /odom
+    odom0_config: [true,  true,  false, # x, y 위치 사용
+                   false, false, false, # roll, pitch, yaw (IMU에 양보)
+                   true,  true,  false, # vx, vy 속도 사용
+                   false, false, true,  # v_yaw(각속도) 사용
+                   false, false, false]
+    odom0_relative: false
+
+    # 2. EBIMU 설정 (/imu)
+    imu0: /ebimu_data
+    imu0_config: [false, false, false, # x, y, z 위치 (IMU는 위치 못 잡음)
+                  false, false, true,  # Roll, Pitch 무시하고 'Yaw'만 사용
+                  false, false, false, # 속도 사용 안 함
+                  false, false, true,  # v_yaw (각속도) 사용
+                  false, false, false] # 선가속도 (보통 노이즈가 심해 끔)
+    
+    # IMU 설정 핵심 파라미터
+    imu0_differential: false # 절대 각도를 쓸 거면 false
+    imu0_relative: true      # 시작 시점의 각도를 0으로 잡으려면 true
+    imu0_remove_gravitational_acceleration: true # 가속도 쓸 경우 필수
