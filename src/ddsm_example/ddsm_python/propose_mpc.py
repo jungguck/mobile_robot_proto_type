@@ -20,10 +20,10 @@ def main():
 			#
 			#
 
-			elapsed = time.time() = start_time
+			elapsed = time.time() - start_time
 
-			v_cmd = ?
-			w_cmd = ?
+			v_cmd = 0.1 * math.sin(elapsed * 0.5)
+			w_cmd = 0.2 * math.cos(elapsed * 0.5)
 
 			#2. 계산된 값을 모터 드라이브에게 전달 
 
@@ -42,5 +42,5 @@ def main():
 		robot.stop()
 		robot.close()
 
-if __name__ == "__main__"
-	main()
+if __name__ == '__main__':
+    main()

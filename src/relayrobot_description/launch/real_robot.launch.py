@@ -1,5 +1,7 @@
 import os
 from launch import LaunchDescription
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import xacro
@@ -13,6 +15,7 @@ def generate_launch_description():
     doc = xacro.process_file(xacro_file)
     robot_urdf = doc.toxml()
 
+    use_imu = LaunchConfiguration('use_imu', default='false')
 
     # 2. Robot State Publisher (필수)
     # -> URDF를 보고 base_link -> laser, base_link -> imu 같은 고정 TF를 방송함
@@ -49,24 +52,26 @@ def generate_launch_description():
         }]
     )
 
-    # 5. IMU 드라이버 노드 (있다면)
+    # 5. IMU 드라이버 노드 (옵션)
     imu_node = Node(
-        package='ebimu_pkg', # 사용하시는 IMU 패키지
-        executable='ebimu_publisher', #실행 파일 이름 
-        name = 'ebimu_publisher',
-        output = 'screen',
+        package='ebimu_pkg',
+        executable='ebimu_publisher',
+        name='ebimu_publisher',
+        output='screen',
+        condition=IfCondition(use_imu),
         parameters=[{
-            'port': '/dev/ttyimu',   # IMU가 연결된 포트 (Lidar랑 겹치면 안됨!)
-            'frame_id': 'base_link'    # URDF랑 이름 맞추기/ 기초 로봇 균형 
-        }]    )
-        
-     #6. odom 데이터를 받음
+            'port': '/dev/ttyimu',
+            'frame_id': 'base_link'
+        }]
+    )
+
+    # 6. odom 데이터를 받는 노드
     odom_node = Node(
-        package='relayrobot_driver', # 사용하시는 IMU 패키지
-        executable='odom_sub', #실행 파일 이름 
-        name = 'odom_sub',
-        output = 'screen',
-           )
+        package='relayrobot_driver',
+        executable='odom_sub',
+        name='odom_sub',
+        output='screen'
+    )
            
 
 	# 7. EKF 필터 노드 추가 (바퀴 Odom + IMU 합치기)
@@ -87,10 +92,10 @@ def generate_launch_description():
 
 
     return LaunchDescription([
-        rsp_node,        # 뼈대 정보 방송
-        my_robot_driver, # 바퀴 굴리고 오도메트리 방송
-        lidar_node,      # 눈(센서) 켜기
-        #imu_node,         # 균형 감각(센서) 켜기
-        # odom_node,       # odometry 
+        rsp_node,
+        my_robot_driver,
+        lidar_node,
+        imu_node,
+        odom_node,
         ekf_node
     ])

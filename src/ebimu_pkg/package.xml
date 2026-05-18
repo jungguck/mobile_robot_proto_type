@@ -6,9 +6,11 @@
   <description>TODO: Package description</description>
   <maintainer email="e2b@e2box.co.kr">e2box</maintainer>
   <license>TODO: License declaration</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
+  <exec_depend>python3-serial</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
