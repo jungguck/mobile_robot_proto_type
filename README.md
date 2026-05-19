@@ -76,6 +76,44 @@ source install/setup.bash
    # 키보드 조종 (선택)
    ros2 run teleop_twist_keyboard teleop_twist_keyboard
    ```
+4. **[터미널 4] 다 그린 맵 저장하기**
+   로봇을 조종해서 지도를 다 그렸다면, SLAM을 끄기 전에 아래 명령어로 맵을 저장합니다.
+   ```bash
+   ros2 run nav2_map_server map_saver_cli -f ~/my_map
+   ```
+   *(저장 후 `my_map.yaml`, `my_map.pgm` 파일이 생성됩니다.)*
+
+---
+
+### 🗺️ 시나리오 C: 저장된 맵에서 자율 주행 (Point A to B)
+저장한 지도를 바탕으로 전역 경로 계획(A*)과 지역 제어(Tube MPC)를 활용하여 목표 지점까지 자율 주행을 수행합니다.
+
+1. **[터미널 1] 하드웨어 드라이버 실행**
+   ```bash
+   ros2 launch relayrobot_description real_robot_260519.launch.py
+   # (시뮬레이션인 경우: ros2 launch relayrobot_description gazebo.launch.py)
+   ```
+2. **[터미널 2] 저장된 맵 불러오기**
+   Nav2의 `map_server`를 활용해 저장했던 지도를 퍼블리시합니다.
+   ```bash
+   ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=$HOME/my_map.yaml
+   # 맵 서버 활성화 (Lifecycle)
+   ros2 run nav2_util lifecycle_bringup map_server
+   ```
+3. **[터미널 3] 경로 계획기 (Path Planner) 실행**
+   A* 알고리즘을 사용해 지도상의 장애물을 피해가는 전역 경로(`global_path`)를 생성합니다.
+   ```bash
+   ros2 run mpc_tubempc_bridge mpc_tubempc_path_planner
+   ```
+4. **[터미널 4] MPC 제어기 (Controller) 실행**
+   생성된 경로를 따라가도록 모터에 `/cmd_vel` 제어 명령을 내립니다.
+   ```bash
+   ros2 run mpc_tubempc_bridge mpc_tubempc_bridge
+   ```
+5. **RViz에서 목표 지점(Goal) 설정**
+   - RViz2를 켜고 (`ros2 launch relayrobot_description display.launch.py`)
+   - 상단 메뉴의 **`2D Goal Pose`** 버튼을 클릭하여 맵 위에서 로봇이 이동할 목적지(Point B)를 클릭 & 드래그하여 방향을 설정합니다.
+   - (경로 계획기가 경로를 생성하고, MPC 제어기가 로봇을 부드럽게 이동시킵니다.)
 
 ### 🖥️ 시나리오 B: Gazebo 시뮬레이션 구동
 ```bash
