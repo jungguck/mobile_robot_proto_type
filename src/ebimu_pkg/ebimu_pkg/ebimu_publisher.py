@@ -1,64 +1,91 @@
-import rclpy # ros2 파이썬 클라이언트 
-from rclpy.node import Node # ros2 node 설정을 위한 클래스 
-from rclpy.qos import QoSProfile # 통신 품질을 위한 클래스 
-from std_msgs.msg import String
-import serial # 시리얼 usb 
-import time
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile
+from sensor_msgs.msg import Imu
+from geometry_msgs.msg import Quaternion
+import serial
+import math
+
+def euler_to_quaternion(roll, pitch, yaw):
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+
+    q = Quaternion()
+    q.w = cy * cp * cr + sy * sp * sr
+    q.x = cy * cp * sr - sy * sp * cr
+    q.y = cy * sp * cr + sy * cp * sr
+    q.z = sy * cp * cr - cy * sp * sr
+    return q
 
 class EbimuPublisher(Node):
     def __init__(self):
-
-        # 노드 초기화 (ebimu_publisher)
-        super().__init__('ebimu_publisher') 
+        super().__init__('ebimu_publisher')
         
-        # QOS 설정 데이터 보간함 10 으로 설정
+        # ROS 2 Parameters
+        self.declare_parameter('port', '/dev/ttyimu')
+        self.declare_parameter('baudrate', 115200)
+        self.declare_parameter('frame_id', 'imu_link')
+        
+        port = self.get_parameter('port').get_parameter_value().string_value
+        baudrate = self.get_parameter('baudrate').get_parameter_value().integer_value
+        self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
+
         qos_profile = QoSProfile(depth=10)
-
-        # 퍼블리쉬 생성, string 메세지 내용 전달 'ebimu_data' 라는 토픽으이름 전송 
-        self.publisher = self.create_publisher(String, 'ebimu_data', qos_profile)
-        
-        # --- [수정 포인트 1] 시리얼 설정 ---
-        # 사용자 입력 받기
-        # port_input = input("EBIMU Port Number (e.g. USB0): ")
-        comport_num = '/dev/imu' 
-        # baud_rate = input("Baudrate (e.g. 115200): ")
-        baud_rate = '115200'
+        self.publisher = self.create_publisher(Imu, 'ebimu_data', qos_profile)
         
         try:
-            self.ser = serial.Serial(port=comport_num, baudrate=int(baud_rate), timeout=0.1)
-            print(f"✅ Serial connected to {comport_num}")
+            self.ser = serial.Serial(port=port, baudrate=baudrate, timeout=0.1)
+            self.get_logger().info(f"✅ Serial connected to {port}")
         except Exception as e:
-            print(f"❌ Serial Error: {e}")
-            exit(1) # 연결 실패시 프로그램 종료
+            self.get_logger().error(f"❌ Serial Error: {e}")
+            exit(1)
 
-        # --- [수정 포인트 2] 주기 조정 (0.02초 = 50Hz 권장) ---
-        timer_period = 0.02 
+        timer_period = 0.02 # 50Hz
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
     def timer_callback(self):
-        # --- [수정 포인트 3] 데이터가 있을 때만 읽기 (Non-blocking) ---
         if self.ser.in_waiting > 0:
             try:
-                # 줄바꿈까지 읽고 디코딩 (에러 무시 옵션 추가)
                 ser_data = self.ser.readline()
                 decoded_data = ser_data.decode('utf-8', errors='ignore').strip()
                 
-                # 빈 데이터가 아니면 보냄
                 if decoded_data:
-                    msg = String()
-                    msg.data = decoded_data
-                    self.publisher.publish(msg)
-                    # 확인용 로그 (잘 되면 주석 처리 하세요)
-                    # print(f"Sent: {msg.data}") 
+                    # EBIMU format: *ROLL,PITCH,YAW,ACCX,ACCY,ACCZ,GYROX,GYROY,GYROZ
+                    clean_msg = decoded_data.replace('*', '')
+                    words = clean_msg.split(',')
+                    data = [float(val) for val in words if val.strip()]
+                    
+                    if len(data) >= 3:
+                        msg = Imu()
+                        msg.header.stamp = self.get_clock().now().to_msg()
+                        msg.header.frame_id = self.frame_id
+                        
+                        # Euler to Quaternion (Degrees to Radians conversion)
+                        roll = math.radians(data[0])
+                        pitch = math.radians(data[1])
+                        yaw = math.radians(data[2])
+                        msg.orientation = euler_to_quaternion(roll, pitch, yaw)
+                        
+                        # Add acceleration and gyro if available
+                        if len(data) >= 9:
+                            msg.linear_acceleration.x = data[3] * 9.80665 # G to m/s^2
+                            msg.linear_acceleration.y = data[4] * 9.80665
+                            msg.linear_acceleration.z = data[5] * 9.80665
+                            msg.angular_velocity.x = math.radians(data[6]) # deg/s to rad/s
+                            msg.angular_velocity.y = math.radians(data[7])
+                            msg.angular_velocity.z = math.radians(data[8])
+
+                        self.publisher.publish(msg)
             except Exception as e:
-                print(f"Read Error: {e}")
+                self.get_logger().warn(f"Read Error: {e}")
 
 def main(args=None):
     rclpy.init(args=args)
-    print("Starting ebimu_publisher..")
-    
     node = EbimuPublisher()
-
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

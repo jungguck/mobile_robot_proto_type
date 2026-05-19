@@ -1,182 +1,138 @@
-# Relay Robot Development Notes
+# Relay Robot Development (Relay Robot Proto-Type)
 
-> 안되면 당황하지말고 바로 ChatGPT 던지셈
+이 리포지토리는 차륜형 모바일 로봇(Differential Drive)의 제어, 센서 융합, SLAM 및 자율 주행을 위한 ROS 2 워크스페이스입니다.
 
----
-
-# 현재 상태
-
-## Hardware
-- 메인 PC 연결 완료
-- 모터 드라이버 연결 완료
-- LiDAR 연결 완료
-- ROS2 통신 확인 완료
-- Diff Drive 기반 주행 가능
-- Gazebo 시뮬레이션 가능
+> **💡 개발 팁:** 작업 중 막히는 부분이 있다면 이 문서를 먼저 정독하고, 해결되지 않을 경우 ROS 2 관련 커뮤니티나 ChatGPT를 활용하세요.
 
 ---
 
-## Simulation
+## 📂 패키지 가이드 (Package Catalog)
 
-260112_ 시뮬레이션 xacro 파일에 diff_drive plugin 넣음  
-→ `/cmd_vel` 속도 명령어를 각 바퀴 회전 속도로 변환함.
+각 패키지의 역할과 주요 파일을 정리하였습니다. 작업을 시작하기 전 해당 패키지의 위치를 확인하세요.
+
+| 패키지명 | 주요 역할 | 핵심 파일 / 경로 |
+| :--- | :--- | :--- |
+| **`relayrobot_description`** | **[가장 중요]** 로봇 모델(URDF), 통합 런치 파일, 전체 설정 | `urdf/relayrobot.xacro`, `launch/real_robot_260519.launch.py` |
+| **`relayrobot_driver`** | 모터 드라이버 노드 (DDSM400) 및 기본 오도메트리 | `relayrobot_driver/motor_node_1.py` |
+| **`sllidar_ros2`** | SLAMTEC LiDAR (A1/A2/A3) 드라이버 | `src/sllidar_node` |
+| **`ebimu_pkg`** | EBIMU-9DOF 센서 드라이버 (Standard IMU Message) | `ebimu_pkg/ebimu_publisher.py` |
+| **`gui_py`** | 텔레옵(Teleop) 및 프로세스 제어용 GUI | `gui_py/main.py` |
+| **`ddsm_example`** | MPC 알고리즘 핵심 로직 및 모터 제어 예제 | `mpc_tubempc/TubeMPCPlanner.py` |
+| **`mpc_tubempc_bridge`** | ROS 2와 MPC 알고리즘을 연결하는 가교 노드 | `src/mpc_tubempc_bridge/` |
+| **`aws-robomaker-...`** | Gazebo 시뮬레이션용 병원 환경 맵 | `worlds/hospital.world` |
 
 ---
 
-# 현재 구조 정리
+## 🛠️ 하드웨어 연결 및 사전 설정 (Setup)
 
-## 주요 패키지
-- `src/relayrobot_description/`
-  - URDF, launch, config 파일 보관
-  - 실제 로봇 실행 `real_robot.launch.py`
-  - SLAM 실행 `cartographer.launch.py`
-  - EKF 설정 `config/ekf.yaml`
-  - Cartographer 설정 `config/my_cartographer.lua`
-- `src/relayrobot_driver/`
-  - 모터 드라이버 노드, odom + joint_states 발행
-  - 실행 가능한 콘솔 스크립트: `main_driver`, `odom_sub`
-- `src/sllidar_ros2/`
-  - SLAMTEC LiDAR ROS2 드라이버
-  - 실행 파일: `sllidar_node`, `sllidar_client`
-- `src/ebimu_pkg/`
-  - IMU 퍼블리셔 노드 코드
-  - 현재 `setup.py`에 콘솔 스크립트가 등록되어야 정상 실행
-- `src/aws-robomaker-hospital-world/`
-  - Gazebo 시뮬레이션 world 파일
-- `src/ddsm_example/`
-  - MPC 프로토타입 코드(`src/ddsm_example/ddsm_python/propose_mpc.py`)
-  - Tube MPC 알고리즘 폴더(`src/ddsm_example/mpc_tubempc/`)
-- `src/mpc_tubempc_bridge/`
-  - 실제 ROS2 odom -> 목표 좌표 -> cmd_vel 제어를 연결하는 브리지 노드
+실제 로봇 구동을 위해 다음 설정을 완료해야 합니다.
 
-## 설치 및 실행 순서
-1. ROS2 환경 설정 및 빌드
+### 1. 시리얼 포트 권한 설정
+로봇 PC에 연결된 USB 장치에 접근하기 위해 권한을 부여합니다.
 ```bash
-source /opt/ros/<distro>/setup.bash
+sudo usermod -aG dialout $USER
+# 설정 후 반드시 로그아웃 또는 재부팅을 하세요.
+```
+
+### 2. udev Rule 등록 (포트 고정)
+LiDAR 포트를 `/dev/rplidar`로 고정하여 실행 시 혼선을 방지합니다.
+```bash
+cd src/sllidar_ros2/scripts
+chmod +x create_udev_rules.sh
+sudo ./create_udev_rules.sh
+```
+
+### 3. 하드웨어 포트 확인
+연결된 장치가 다음 포트로 인식되는지 확인하세요.
+- **모터 드라이버:** `/dev/ttyACM0`
+- **IMU:** `/dev/ttyimu` (또는 `/dev/ttyUSB0`)
+- **LiDAR:** `/dev/rplidar` (또는 `/dev/ttyUSB1`)
+
+---
+
+## 🚀 실행 가이드 (Operation Guide)
+
+### 0. 기본 환경 로드 (모든 터미널 공통)
+```bash
+source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-2. 시뮬레이션 환경
+### 🤖 시나리오 A: 실제 로봇 (Real Robot) 구동 순서
+1. **[터미널 1] 하드웨어 드라이버 통합 실행**
+   ```bash
+   # 모터 + IMU 융합 오도메트리 + 라이더 통합 실행
+   ros2 launch relayrobot_description real_robot_260519.launch.py
+   ```
+2. **[터미널 2] SLAM 맵핑 시작**
+   ```bash
+   ros2 launch relayrobot_description cartographer.launch.py
+   ```
+3. **[터미널 3] 시각화 및 조종**
+   ```bash
+   # RViz2 실행
+   ros2 launch relayrobot_description display.launch.py
+   # 키보드 조종 (선택)
+   ros2 run teleop_twist_keyboard teleop_twist_keyboard
+   ```
+
+### 🖥️ 시나리오 B: Gazebo 시뮬레이션 구동
 ```bash
 ros2 launch relayrobot_description gazebo.launch.py
 ```
+- 실제 로봇이 없어도 `/cmd_vel` 명령어로 가상 로봇을 움직일 수 있습니다.
 
-3. 실제 로봇 연결 시
-```bash
-ros2 launch relayrobot_description real_robot.launch.py
-```
-실제 로봇에서 IMU까지 함께 쓰려면:
-```bash
-ros2 launch relayrobot_description real_robot.launch.py use_imu:=true
-```
+---
 
-## 실제 로봇 + SLAM + RViz 실행 순서
-아래 명령은 각각 다른 터미널에서 실행합니다. 각 터미널마다 `source install/setup.bash`를 먼저 실행하세요.
+## 🔍 상태 확인 및 문제 해결 (Troubleshooting)
 
-1. ROS2 및 워크스페이스 준비
-```bash
-source /opt/ros/jazzy/setup.bash  # 현재 환경에서 설치된 ROS2 버전
-source install/setup.bash
-```
+### 센서 데이터가 정상인가요?
+- **Odom 확인:** `ros2 topic echo /odom` (로봇을 손으로 밀었을 때 좌표가 바뀌는지 확인)
+- **Lidar 확인:** `ros2 topic hz /scan` (약 7~10Hz 정도 나오면 정상)
+- **IMU 확인:** `ros2 topic echo /ebimu_data` (로봇을 회전시켰을 때 orientation.z 값이 바뀌는지 확인)
 
-2. 로봇 연결 및 드라이버 실행
-```bash
-ros2 launch relayrobot_description real_robot.launch.py use_imu:=true
-```
+### 자주 발생하는 문제
+- **"Permission Denied":** 위 시리얼 포트 권한 설정을 확인하세요.
+- **"Package not found":** `source install/setup.bash`를 했는지 확인하세요.
+- **SLAM 맵이 겹침:** IMU 데이터가 튀거나 휠 오도메트리 오차가 크면 발생합니다. `real_robot_260519.launch.py`를 사용하고 있는지 확인하세요.
 
-3. SLAM으로 맵 생성
-```bash
-ros2 launch relayrobot_description cartographer.launch.py
-```
+---
 
-4. RViz로 맵 보기
-```bash
-ros2 launch relayrobot_description display.launch.py
-```
+## 🔄 시스템 구조 다이어그램
+```mermaid
+graph TD
+    subgraph Input
+        Teleop[Teleop Node]
+        GUI[GUI Control]
+    end
 
-5. 간단한 버튼 GUI 실행
-```bash
-ros2 run gui_py gui_py
-```
+    subgraph Core
+        Driver[Real Robot Driver]
+        SLAM[Cartographer SLAM]
+        MPC[MPC Bridge]
+    end
 
-### GUI 사용 안내
-- README는 이제 RViz에서 지도를 확인하고, 버튼 GUI로 간단하게 제어하는 흐름에 집중합니다.
-- GUI는 간단한 버튼 형태로 동작합니다.
-- 전진 / 후진 / 좌 / 우 / 정지 버튼으로 로봇을 제어합니다.
-- SLAM, LIDAR, IMU 시작 버튼은 센서 및 SLAM 프로세스를 켭니다.
-- 현재 `Start MPC` 버튼은 기본적인 테스트용 고정 명령을 보냅니다.
+    subgraph Hardware
+        Motor[DDSM400 Motors]
+        Lidar[Lidar Sensor]
+        IMU[IMU Sensor]
+    end
 
-### IMU + 엔코더 + SLAM 주의
-- IMU와 엔코더(odom)는 SLAM에 보조 정보로 들어가지만, 둘 다 데이터가 불안정하면 SLAM 성능이 떨어질 수 있습니다.
-- 권장 순서:
-  1. 먼저 LIDAR SLAM만 켜서 맵이 잘 그려지는지 확인
-  2. 엔코더/odom을 켜서 보조로 추가
-  3. IMU를 켜서 추가 보정을 시도
-- IMU가 너무 노이즈가 많거나 타임스탬프가 어긋나면, `use_imu_data=false` 상태로만 쓰는 것이 안전합니다.
-- odom/IMU 에러가 의심되면 TF 프레임(`odom`, `base_link`, `map`)과 메시지 타임스탬프를 먼저 확인하세요.
-
-### 시스템 노드 관계 (현재 실행 순서)
-- `real_robot.launch.py`
-  - `relayrobot_driver/main_driver` : 모터 드라이버 + odom/joint_states 발행
-  - `sllidar_ros2/sllidar_node` : LiDAR 스캔 발행
-  - `ebimu_pkg/ebimu_publisher` : IMU 데이터 발행 (옵션)
-  - `relayrobot_driver/odom_sub` : odom 디버그 구독기
-  - `robot_localization/ekf_node` : wheel odom + IMU 융합
-- `cartographer.launch.py` : Cartographer SLAM
-- `display.launch.py` : RViz 실행
-- `gui_py` : 버튼형 GUI 실행
-
-### MPC 관련 의존성
-- `mpc_tubempc_bridge`는 내부적으로 `ddsm_example/mpc_tubempc/TubeMPCPlanner.py`를 사용합니다.
-- 해당 MPC 코드에는 다음 라이브러리가 필요합니다:
-  - `numpy`
-  - `scipy`
-  - `cvxpy`
-  - `osqp` (또는 `cvxpy`에서 지원하는 QP solver)
-- `mpc_tubempc_bridge` 패키지 메타데이터에는 아직 이 라이브러리들이 명시되어 있지 않습니다.
-  따라서 MPC 기능을 쓰려면 별도로 Python 패키지를 설치해 주세요.
-
-### ROS2 버전 권장
-- 이 저장소는 ROS2 `ament_python` 패키지 구조와 `launch_ros` API를 사용합니다.
-- 현재 환경에서는 `/opt/ros/jazzy`가 설치되어 있으므로, ROS2 `Jazzy`를 사용할 수 있습니다.
-- 일반적으로 `Humble` 이상(`Humble`, `Iron`, `Jazzy`) 호환성을 추천합니다.
-
-6. 모터 드라이버 노드 단독 실행
-```bash
-ros2 run relayrobot_driver main_driver
+    Teleop -->|/cmd_vel| Driver
+    GUI -->|/cmd_vel| Driver
+    Lidar -->|/scan| SLAM
+    IMU -->|/ebimu_data| Driver
+    Driver -->|/odom| SLAM
+    Driver -->|/odom| MPC
+    SLAM -->|/map| GUI
+    MPC -->|/cmd_vel| Driver
+    Driver <-->|Serial| Motor
 ```
 
 ---
 
-# 현재 미완성 / 체크해야 할 점
-
-
-
----
-
-# 앞으로 해야할 작업
-
-## 1. GUI 제작 (`gui_py`)
-
-### 목적
-GUI에서 로봇을 간단하게 조작하기 위함.
-
-### 필요한 기능
-- 전진 / 후진
-- 좌회전 / 우회전
-- 정지
-- 속도 조절
-- SLAM 시작
-- SLAM 종료
-- MPC 테스트 실행
-- 토픽 상태 확인
-
-### 예상 구조
-```text
-gui_py/
- ├── main.py
- ├── slam_control.py
- ├── teleop_control.py
- ├── mpc_control.py
- └── ui/
+## 📋 앞으로의 작업 (Roadmap)
+1. **GUI 고도화:** `gui_py` 패키지에서 속도 제한(Limit) 설정 기능 추가.
+2. **MPC 안정화:** 다양한 경로(Path)에 대한 추종 성능 테스트.
+3. **자율 주행 통합:** Nav2 패키지를 활용한 목적지 기반 주행 구현.

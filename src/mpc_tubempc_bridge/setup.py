@@ -5,7 +5,7 @@ package_name = 'mpc_tubempc_bridge'
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(where='src'),
     package_dir={'': 'src'},
     install_requires=['setuptools'],
     zip_safe=True,

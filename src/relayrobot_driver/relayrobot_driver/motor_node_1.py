@@ -14,18 +14,24 @@ class RealRobotDriver(Node):
     def __init__(self):
         super().__init__('real_robot_driver')
 
+        # ROS 2 Parameters
+        self.declare_parameter('port', '/dev/ttyACM0')
+        self.declare_parameter('wheel_radius', 0.05) # Aligning with URDF (diameter 0.1)
+        self.declare_parameter('wheel_base', 0.165)  # Aligning with URDF (separation 0.165)
+
+        port = self.get_parameter('port').get_parameter_value().string_value
+        self.wheel_radius = self.get_parameter('wheel_radius').get_parameter_value().double_value
+        self.wheel_base = self.get_parameter('wheel_base').get_parameter_value().double_value
+
         # 1. 모터 드라이버 연결
         try:
-            # 포트가 ttyACM0인지 ttyUSB0인지 확인 필수!
-            self.driver = MotorDriver(port='/dev/ttyACM0') 
-            self.get_logger().info("DDSM400 Motor Connected Successfully!")
+            self.driver = MotorDriver(port=port) 
+            self.get_logger().info(f"DDSM400 Motor Connected to {port} Successfully!")
         except Exception as e:
             self.get_logger().error(f"Motor connection failed: {e}")
             self.driver = None
 
-        # 2. 로봇 파라미터 (본인 로봇 수치에 맞게 조절)
-        self.wheel_radius = 0.035
-        self.wheel_base = 0.2
+        # 2. 로봇 상태 변수
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0

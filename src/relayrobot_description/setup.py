@@ -32,6 +32,7 @@ setup(
         
         'odom_listener = relayrobot_description.odom_listener:main',
         'real_driver = relayrobot_description.real_robot_driver:main',
+        'real_robot_driver_260519 = relayrobot_description.real_robot_driver_260519:main',
 
         ],
     },

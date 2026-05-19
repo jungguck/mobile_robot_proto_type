@@ -3,7 +3,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
-from tf_transformations import quanternion_from_euler
+from tf_transformations import quaternion_from_euler
 import math
 import numpy as np
 # 주의: 저장하신 파일명이 motor_drive.py라면 아래처럼 고치세요 , / motor_driver_1 는 피드백 잇음 
