@@ -87,7 +87,8 @@ def generate_launch_description():
         executable='ekf_node',
         name='ekf_filter_node',
         output='screen',
-        parameters=[ekf_config_path] # 위에서 찾은 경로의 파일을 이 노드에 먹여줍니다.
+        parameters=[ekf_config_path],
+        remappings=[('/odometry/filtered', '/odom')]
     )
 
 

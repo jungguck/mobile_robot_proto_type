@@ -38,7 +38,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'channel_type': 'serial',
-            'serial_port': '/dev/lidar',
+            'serial_port': '/dev/rplidar',
             'serial_baudrate': 1000000,
             'frame_id': 'lidar_v1_1',
             'inverted': False,
@@ -59,12 +59,21 @@ def generate_launch_description():
         }]
     )
 
-    # 6. EKF 노드는 드라이버 자체에서 합치므로 선택사항입니다. 
-    # 일단 꺼두고, 드라이버가 쏘는 odom만으로도 충분히 정확할 것입니다.
+    # 6. EKF 노드 (센서 융합)
+    ekf_config_path = os.path.join(share_dir, 'config', 'ekf.yaml')
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[ekf_config_path],
+        remappings=[('odometry/filtered', 'odom')]
+    )
 
     return LaunchDescription([
         rsp_node,
         imu_node,
         my_robot_driver,
         lidar_node,
+        ekf_node,
     ])

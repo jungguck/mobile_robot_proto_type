@@ -10,8 +10,8 @@ ekf_filter_node:
     base_link_frame: base_link  # 로봇 본체 좌표계
     world_frame: odom           # 현재는 odom 기준
 
-    # 1. 바퀴 오도메트리 설정 (/odom)
-    odom0: /odom
+    # 1. 바퀴 오도메트리 설정 (/odom_raw)
+    odom0: /odom_raw
     odom0_config: [true,  true,  false, # x, y 위치 사용
                    false, false, false, # roll, pitch, yaw (IMU에 양보)
                    true,  true,  false, # vx, vy 속도 사용

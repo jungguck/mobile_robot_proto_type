@@ -26,18 +26,13 @@ class RealRobotDriver260519(Node):
             self.driver = None
 
         # 2. 로봇 파라미터
-        self.wheel_radius = 0.035
-        self.wheel_base = 0.2
+        self.wheel_radius = 0.05
+        self.wheel_base = 0.165
         
         # Odom 위치 변수
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
-        
-        # IMU 관련 변수
-        self.imu_yaw = 0.0
-        self.imu_offset = None  # 시작 시점의 IMU 각도를 0으로 잡기 위함
-        self.use_imu = False
 
         # Joint State 변수
         self.left_wheel_angle = 0.0
@@ -47,9 +42,16 @@ class RealRobotDriver260519(Node):
         self.last_time = self.get_clock().now()
 
         # 3. Publisher & Subscriber
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
+        # EKF를 사용할 것이므로 odom 토픽 이름은 odom_unfiltered로 변경하거나 그대로 둬도 됨.
+        # robot_localization에서 odom을 구독하도록 설정했음. 여기선 그냥 odom 또는 raw_odom 발행.
+        # launch.py에서 EKF가 odometry/filtered를 odom으로 리맵핑함. 
+        # 드라이버는 'odom_raw' 또는 'wheel/odom' 등으로 발행하고, EKF가 그걸 구독해야 충돌이 없음.
+        # 하지만 ekf.yaml을 보니 odom0: /odom 으로 설정되어 있음.
+        # 즉 EKF가 /odom을 구독하고, odometry/filtered를 뱉으면, launch에서 odom으로 리맵하면 무한루프.
+        # EKF가 odom_raw를 구독하게 하거나, 드라이버가 odom_raw를 쏘게 하고 ekf.yaml을 고쳐야 함.
+        # 일단 여기선 'odom_raw'로 쏘도록 변경하자.
+        self.odom_pub = self.create_publisher(Odometry, 'odom_raw', 10)
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
-        self.br = TransformBroadcaster(self)
 
         self.subscription = self.create_subscription(
             Twist,
@@ -57,33 +59,12 @@ class RealRobotDriver260519(Node):
             self.cmd_vel_callback,
             10
         )
-        
-        # [추가] IMU 데이터 구독
-        self.imu_sub = self.create_subscription(
-            Imu,
-            'ebimu_data',
-            self.imu_callback,
-            10
-        )
          
         # 4. Timer (0.1초마다 실행)
         self.timer_period = 0.1 
         self.timer = self.create_timer(self.timer_period, self.timer_callback)
 
-        self.get_logger().info("Real Robot Driver 260519 Started (Odom + IMU Fusion)...")
-
-    def imu_callback(self, msg):
-        # 쿼터니언을 오일러 각도로 변환
-        orientation_list = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
-        _, _, yaw = euler_from_quaternion(orientation_list)
-        
-        if self.imu_offset is None:
-            self.imu_offset = yaw
-            self.get_logger().info(f"IMU Offset initialized: {self.imu_offset}")
-        
-        # 시작 시점의 각도를 0으로 맞춤
-        self.imu_yaw = yaw - self.imu_offset
-        self.use_imu = True
+        self.get_logger().info("Real Robot Driver Started (Wheel Odom Only)...")
 
     def cmd_vel_callback(self, msg):
         if not self.driver: return
@@ -121,12 +102,8 @@ class RealRobotDriver260519(Node):
         joint_msg.velocity = [ang_vel_L, ang_vel_R]
         self.joint_pub.publish(joint_msg)
 
-        # 6. 위치 적분
-        # 방향(Theta) 결정: IMU 데이터가 있으면 IMU를 쓰고, 없으면 바퀴 계산값을 씀
-        if self.use_imu:
-            self.theta = self.imu_yaw
-        else:
-            self.theta += w_enc * dt
+        # 6. 위치 적분 (바퀴 오도메트리 전용)
+        self.theta += w_enc * dt
 
         # X, Y는 바퀴 속도와 현재 방향(Theta)으로 계산
         self.x += v * math.cos(self.theta) * dt
@@ -153,34 +130,20 @@ class RealRobotDriver260519(Node):
         odom.twist.twist.linear.x = v
         odom.twist.twist.angular.z = w
 
-        # IMU를 사용할 때는 신뢰도를 높이기 위해 Covariance 조정
-        if self.use_imu:
-            rot_cov = 0.01 # IMU가 있으면 회전 오차 작음
-        else:
-            rot_cov = 0.1  # 바퀴만 쓰면 회전 오차 큼
-
+        # 바퀴 오차 설정
         odom.pose.covariance = [
             0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.05, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.05, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.01, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 0.01, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, rot_cov
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.1
         ]
         odom.twist.covariance = odom.pose.covariance[:]
 
         self.odom_pub.publish(odom)
 
-        # TF Broadcast
-        t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = "odom"
-        t.child_frame_id = "base_link"
-        t.transform.translation.x = self.x
-        t.transform.translation.y = self.y
-        t.transform.translation.z = 0.0
-        t.transform.rotation = odom.pose.pose.orientation
-        self.br.sendTransform(t)
+        # TF Broadcast 제거 (ekf_node가 담당)
 
     def stop_robot(self):
         if self.driver:

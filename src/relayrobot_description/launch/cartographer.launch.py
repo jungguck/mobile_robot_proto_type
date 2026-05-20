@@ -13,7 +13,7 @@ def generate_launch_description():
     config_file = 'my_cartographer.lua'
 
     # 2. 시뮬레이션 시간 설정 (매우 중요)
-    use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
 
     # 3. 카토그래퍼 노드 설정
     cartographer_node = Node(

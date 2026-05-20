@@ -42,7 +42,7 @@ class RealRobotDriver(Node):
         self.right_wheel_angle = 0.0
 
         # 3. Publisher & Subscriber
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
+        self.odom_pub = self.create_publisher(Odometry, 'odom_raw', 10)
         self.joint_pub = self.create_publisher(JointState, 'joint_states', 10)
         self.br = TransformBroadcaster(self)
 
