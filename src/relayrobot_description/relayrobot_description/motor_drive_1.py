@@ -102,7 +102,7 @@ class MotorDriver:
         cmd_r = {"T": 10010, "id": self.MOTOR_ID_R, "cmd": rpm_R, "act": 10}
         self.send_json(cmd_r)
 
-        time.sleep(0.05)
+        time.sleep(0.01)
 
         cmd_l = {"T": 10010, "id": self.MOTOR_ID_L, "cmd": -rpm_L, "act": 10}
         self.send_json(cmd_l)
