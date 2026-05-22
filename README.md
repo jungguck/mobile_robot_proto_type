@@ -10,6 +10,7 @@
 
 ### 🔄 데이터 흐름도 (Data Flow)
 
+
 ```mermaid
 graph TD
     subgraph "Sensing & Actuation (Hardware)"
@@ -24,21 +25,21 @@ graph TD
         SLAM[Cartographer SLAM]
         
         Motor -->|Encoders| Driver
-        Driver -->|/odom_raw| EKF
-        IMU -->|/ebimu_data| EKF
-        Lidar -->|/scan| SLAM
+        Driver -->|"/odom_raw"| EKF
+        IMU -->|"/ebimu_data"| EKF
+        Lidar -->|"/scan"| SLAM
         
         %% SLAM Correction
-        SLAM -.->|TF: map -> odom| EKF
+        SLAM -.->|"TF: map -> odom"| EKF
     end
 
     subgraph "Navigation & Control"
         GUI[Custom Control GUI]
         MPC[Tube MPC Planner]
         
-        EKF -->|/odom (SLAM Corrected)| MPC
-        MPC -->|/cmd_vel| Driver
-        Driver -->|Serial (10ms Latency)| Motor
+        EKF -->|"/odom (SLAM Corrected)"| MPC
+        MPC -->|"/cmd_vel"| Driver
+        Driver -->|"Serial (10ms Latency)"| Motor
     end
 ```
 
