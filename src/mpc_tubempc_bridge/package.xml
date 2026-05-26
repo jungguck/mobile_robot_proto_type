@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mpc_tubempc_bridge</name>
+  <version>0.0.0</version>
+  <description>ROS2 bridge node for Tube MPC path tracking using mpc_tubempc.</description>
+  <maintainer email="todo@todo.com">relayrobot</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

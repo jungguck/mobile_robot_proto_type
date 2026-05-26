@@ -1,0 +1,196 @@
+<?xml version="1.0" ?>
+<robot name="relayrobot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find relayrobot_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find relayrobot_description)/urdf/relayrobot.trans" />
+<xacro:include filename="$(find relayrobot_description)/urdf/relayrobot.gazebo" />
+
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.02849873201115896 0.0010074794741378814 0.059470655413059396" rpy="0 0 0"/>
+    <mass value="1.5"/>
+    <inertia ixx="0.015961" iyy="0.020269" izz="0.023585" ixy="0.000105" iyz="-1.3e-05" ixz="0.00148"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="left_wheel_v1_1">
+  <inertial>
+    <origin xyz="0.00010310967788917935 0.009300000000000141 0.00014263087704373054" rpy="0 0 0"/>
+    <mass value="0.584454388782356"/>
+    <inertia ixx="0.000203" iyy="0.000373" izz="0.000203" ixy="-0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.065 -0.0825 -0.019" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/left_wheel_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.065 -0.0825 -0.019" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/left_wheel_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="right_wheel_v1_1">
+  <inertial>
+    <origin xyz="-9.685606761067334e-10 -0.00929999999999985 -1.4899380340605006e-11" rpy="0 0 0"/>
+    <mass value="0.584454388782356"/>
+    <inertia ixx="0.000203" iyy="0.000373" izz="0.000203" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.065 0.0825 -0.019" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/right_wheel_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.065 0.0825 -0.019" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/right_wheel_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="lidar_v1_1">
+  <inertial>
+    <origin xyz="1.9380429697180013e-07 -0.001999947791913167 -0.0011862981259600225" rpy="0 0 0"/>
+    <mass value="0.78745669696203"/>
+    <inertia ixx="0.000267" iyy="0.000267" izz="0.000322" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.046963 -0.002846 -0.1223" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/lidar_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.046963 -0.002846 -0.1223" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/lidar_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="caserwheel_support_v1_1">
+  <inertial>
+    <origin xyz="0.0017262529179650904 -0.00048363267287916754 -0.0038867505923491" rpy="0 0 0"/>
+    <mass value="0.034814731241262914"/>
+    <inertia ixx="2e-06" iyy="5e-06" izz="6e-06" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.04326 0.00025 -0.012308" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/caserwheel_support_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.04326 0.00025 -0.012308" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/caserwheel_support_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="casterwhhel_v1_1">
+  <inertial>
+    <origin xyz="-1.485649896576513e-07 0.006650262472581112 2.9931070903536916e-07" rpy="0 0 0"/>
+    <mass value="0.048859797020980505"/>
+    <inertia ixx="3e-06" iyy="4e-06" izz="3e-06" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.041063 0.007638 0.009569" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/casterwhhel_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.041063 0.007638 0.009569" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find relayrobot_description)/meshes/casterwhhel_v1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="left_wheel_joint" type="continuous">
+  <origin xyz="-0.065 0.0825 0.019" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="left_wheel_v1_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+  <limit effort="100.0" velocity="100.0"/>
+</joint>
+
+<joint name="right_wheel_joint" type="continuous">
+  <origin xyz="-0.065 -0.0825 0.019" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="right_wheel_v1_1"/>
+  <axis xyz="0.0 1.0 0.0"/>			# 이거 진짜 중요함 이거땜에 하루 다날렸노,, left 축이랑 반대니까 안가고 계속 뺑뺑이 돌렸다는 문제가발생함. 
+  <limit effort="100.0" velocity="100.0"/>
+</joint>
+
+<joint name="Rigid 40" type="fixed">
+  <origin xyz="-0.046963 0.002846 0.1223" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="lidar_v1_1"/>
+</joint>
+
+<joint name="Rigid 41" type="fixed">
+  <origin xyz="0.04326 -0.00025 0.012308" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="caserwheel_support_v1_1"/>
+</joint>
+
+<joint name="Revolute 42" type="fixed">
+  <origin xyz="-0.002197 -0.007388 -0.021877" rpy="0 0 0"/>
+  <parent link="caserwheel_support_v1_1"/>
+  <child link="casterwhhel_v1_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<gazebo>
+    <plugin name='diff_drive' filename='libgazebo_ros_diff_drive.so'>
+      <ros>
+        <namespace>/</namespace>
+        <remapping>cmd_vel:=cmd_vel</remapping>
+        <remapping>odom:=odom</remapping>
+      </ros>
+
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+
+      <wheel_separation>0.165</wheel_separation>
+      
+      <wheel_diameter>0.1</wheel_diameter>
+
+      <max_wheel_torque>2000</max_wheel_torque>
+      <max_wheel_acceleration>5.0</max_wheel_acceleration>
+
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>true</publish_wheel_tf>
+
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+    </plugin>
+  </gazebo>
+
+</robot>
