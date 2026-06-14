@@ -1,6 +1,8 @@
+# 미사용 파일 - 현재 Cartographer SLAM 사용 (cartographer.launch.py)
+# slam_toolbox로 전환 시 use_sim_time을 반드시 false로 유지할 것
 slam_toolbox:
   ros__parameters:
-    use_sim_time: true
+    use_sim_time: false
 
     odom_frame: odom
     map_frame: map

@@ -75,10 +75,12 @@ class RealRobotDriver260519(Node):
 
         # 1. RPM 읽기
         rpm_L, rpm_R = self.driver.read_feedback()
+        rpm_L = -rpm_L  # 왼쪽 모터는 drive()에서 -cmd로 전송하므로 피드백도 부호 반전 필요
 
         # 2. RPM -> 선속도(m/s) 변환
-        vl = (rpm_L / 6.0) * (2 * math.pi * self.wheel_radius)
-        vr = (rpm_R / 6.0) * (2 * math.pi * self.wheel_radius)
+        # spd 피드백은 실제 RPM의 10배 (cmd 100 = 10 RPM), 따라서 /600 = /60/10
+        vl = (rpm_L / 600.0) * (2 * math.pi * self.wheel_radius)
+        vr = (rpm_R / 600.0) * (2 * math.pi * self.wheel_radius)
 
         # 3. 로봇 속도
         v = (vl + vr) / 2.0
