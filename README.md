@@ -172,7 +172,39 @@ ROS 2의 좌표계는 **TF(Transform) Tree**라는 사슬로 연결되어 있습
 - **해결**: MPC 로직에 `/odom` 구독을 추가하여 실시간 오차(Distance/Angle Error)를 계산하는 피드백 루프 완성.
 - **결과**: 정교한 궤적 추종 주행 가능.
 
-### 4. DDSM HAT(B) ESP32 모드 모터 첫 통신 확인 (2026-06-14)
+### 4. EB-IMU 시리얼 파싱 오류 수정 및 캘리브레이션 추가 (2026-06-14)
+- **문제 원인**: `readline()`이 `\r\n` 두 줄 동시에 읽어 데이터가 `0.003.001` 처럼 붙어서 파싱 실패.
+- **해결**:
+  - `.replace('\r','').replace('\n','')` 로 개행문자 완전 제거
+  - `*` 시작 확인 + 정확히 9개 필드 검증 후 파싱
+- **YAW wraparound 수정**: EBIMU가 0~360° 출력 → 왼쪽 회전 시 335° 등으로 튐 → `-180~+180°` 로 변환
+  ```python
+  yaw_deg = data[2] - 360 if data[2] > 180 else data[2]
+  ```
+- **초기 바이어스 캘리브레이션 추가**: 노드 시작 후 10초간 정지 상태 평균값을 구해 ACC(x,y), GYRO(z) 바이어스 자동 제거
+- **EKF에 넘기는 필드**:
+  - `orientation` (YAW → Quaternion 변환) — 절대 헤딩
+  - `angular_velocity.z` (GYROZ) — 회전 속도 ← **EKF에서 가장 중요**
+  - `linear_acceleration.x/y` (ACCX, ACCY) — 선가속도
+  - ROLL/PITCH, ACCZ, GYROX/Y 는 지상 로봇에서 불필요
+- **테스트 스크립트** (`ebimu_pkg` 패키지):
+
+  ```bash
+  # ROS 없이 raw 값 확인
+  python3 src/ebimu_pkg/ebimu_pkg/imu_test_1.py
+
+  # 캘리브레이션 + EKF 필요 필드만 출력
+  python3 src/ebimu_pkg/ebimu_pkg/imu_test_2.py
+
+  # ros publiasher
+  ros2 run ebimu_pkg ebimu_publisher --ros-args -p port:=/dev/ttyUSB0
+  
+  # ros subscriber
+  ros2 topic echo /ebimu_data
+
+  ```
+
+### 5. DDSM HAT(B) ESP32 모드 모터 첫 통신 확인 (2026-06-14)
 - **상황**: Lidar, DDSM HAT(B), IMU를 처음 동시 연결 후 모터가 동작하지 않음.
 - **원인**: 명령어 오류 + 연결 방식 미확인 (ESP32 모드 미설정).
 - **확인 사항**:
