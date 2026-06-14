@@ -82,7 +82,43 @@ graph TD
 *   **수평 유지:** 지면과 완벽하게 수평이 되도록 고정하십시오. 기울어질 경우 회전 데이터에 중력 가속도가 섞여 오차가 발생합니다.
 *   **진동 절연:** 모터의 미세 진동이 센서에 전달되지 않도록 얇은 고무 패드나 폼 테이프 위에 부착하는 것을 권장합니다.
 
-### 2. 모터 제어 지연 최적화
+### 2. DDSM HAT(B) 모터 드라이버 연결 주의사항 ⚠️
+
+#### 반드시 ESP32 모드로 연결할 것
+DDSM HAT(B)는 두 가지 모드(Arduino / ESP32)를 지원합니다.  
+**이 프로젝트는 반드시 ESP32 모드로 설정해야 합니다.**
+- ESP32 모드 설정 시 → `/dev/ttyACM0` 으로 인식
+- 모드가 다르면 포트가 잡혀도 JSON 명령이 무시됨
+
+#### cmd 값 스케일링 (중요!)
+DDSM HAT(B) ESP32 모드는 cmd 값을 그대로 RPM으로 해석하지 않습니다.
+
+| cmd 값 | 실제 RPM |
+| :--- | :--- |
+| 100 | 10 RPM |
+| 10 | 1 RPM |
+| 600 | 60 RPM |
+
+> **공식:** `실제 RPM = cmd ÷ 10`  
+> `motor_node_1.py` 내 변환식에서 `/ 600.0` 을 쓰는 이유가 바로 이 때문입니다. (일반 RPM 변환 `/ 60.0` × 보정 `/ 10`)
+
+#### 시리얼 권한 (최초 1회 설정, 이후 sudo 불필요)
+```bash
+sudo usermod -aG dialout $USER
+# 반드시 로그아웃 후 재로그인 해야 적용됨
+```
+적용 확인:
+```bash
+groups | grep dialout   # dialout 이 출력되면 성공
+```
+
+#### 단독 통신 테스트
+ROS 없이 모터 단독 통신 확인:
+```bash
+python3 src/relayrobot_driver/relayrobot_driver/motor_test_1.py
+```
+
+### 3. 모터 제어 지연 최적화
 본 프로젝트는 제어 응답성을 위해 모터 명령 사이의 지연 시간을 **10ms**로 최적화하였습니다. (`motor_drive_1.py` 수정 완료)
 
 ---
@@ -135,6 +171,19 @@ ROS 2의 좌표계는 **TF(Transform) Tree**라는 사슬로 연결되어 있습
 - **증상**: 로봇이 목표 방향과 상관없이 제멋대로 주행함.
 - **해결**: MPC 로직에 `/odom` 구독을 추가하여 실시간 오차(Distance/Angle Error)를 계산하는 피드백 루프 완성.
 - **결과**: 정교한 궤적 추종 주행 가능.
+
+### 4. DDSM HAT(B) ESP32 모드 모터 첫 통신 확인 (2026-06-14)
+- **상황**: Lidar, DDSM HAT(B), IMU를 처음 동시 연결 후 모터가 동작하지 않음.
+- **원인**: 명령어 오류 + 연결 방식 미확인 (ESP32 모드 미설정).
+- **확인 사항**:
+  - DDSM driver HAT(B)를 **ESP32 모드**로 설정 → `/dev/ttyACM0` 으로 인식됨.
+  - `cmd 100 = 10 RPM` 스케일링 주의 (cmd 값은 RPM의 10배로 전달).
+  - 포트 첫 접근 시 `Permission denied` 에러 → `sudo usermod -aG dialout $USER` 후 재로그인으로 해결.
+- **결과**: `motor_test_1.py`(`relayrobot_driver` 패키지 내)로 단독 통신 확인 완료.
+  ```bash
+  # ROS 없이 단독 모터 테스트
+  python3 src/relayrobot_driver/relayrobot_driver/motor_test_1.py
+  ```
 
 ---
 
