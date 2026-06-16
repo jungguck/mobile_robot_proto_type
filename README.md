@@ -480,6 +480,32 @@ DDSM HAT(B)는 Arduino / ESP32 두 모드를 지원합니다. **이 프로젝트
 - ESP32 모드 → `/dev/ttyACM0` 으로 인식
 - 모드가 다르면 포트가 잡혀도 JSON 명령 무시됨
 
+#### 모터 ID 설정 (좌/우 바퀴 구분) ⚠️ 중요
+
+DDSM 모터는 공장 출고 시 ID가 **1 또는 2**로 설정돼 있고, RS485 버스에 두 모터가 함께 물립니다.  
+드라이버는 `id=1`(오른쪽), `id=2`(왼쪽)로 각 모터에 따로 명령을 보내므로 **두 모터의 ID가 서로 달라야** 합니다.
+
+**증상:** 두 바퀴가 명령에 똑같이 반응(동시에 회전) → 두 모터의 ID가 같은 상태.
+
+**ID 확인/변경 도구:** `motor_id_check.py`
+
+```bash
+# 1. 모터를 '한 개만' HAT에 연결  (반드시 1개! 2개면 둘 다 같은 ID로 바뀜)
+# 2. HAT 전원 ON 후 현재 ID 조회
+python3 src/relayrobot_driver/relayrobot_driver/motor_id_check.py
+
+# 3. 이 모터를 원하는 ID로 변경 (예: 2번)
+python3 src/relayrobot_driver/relayrobot_driver/motor_id_check.py 2
+
+# 4. HAT 전원 OFF → ON  (전원 사이클당 1회만 변경 가능, 끄면 저장됨)
+# 5. 다른 모터로 교체 후 위 과정 반복하여 ID=1 부여
+```
+
+> **왜 한 번에 안 바뀌나?** DDSM 펌웨어는 ID 변경 프레임(`T:10011`)을 **5번 연속** 받아야 저장합니다  
+> (`ddsm_ctrl.cpp`의 `ddsm_change_id` → `for(i<5)` 루프). `motor_id_check.py`는 5번 반복 전송하도록 구현됨.
+
+> **왜 1개만 연결?** 펌웨어 명세상 여러 모터가 연결된 상태에서 ID를 바꾸면 **연결된 모든 모터가 같은 ID로** 바뀝니다.
+
 #### cmd 값 스케일링
 
 | cmd 값 | 실제 RPM |
@@ -492,6 +518,7 @@ DDSM HAT(B)는 Arduino / ESP32 두 모드를 지원합니다. **이 프로젝트
 #### 단독 통신 테스트
 
 ```bash
+# 두 모터가 각각 R 단독 / L 단독 / 전진 순서로 도는지 확인
 python3 src/relayrobot_driver/relayrobot_driver/motor_test_1.py
 ```
 
@@ -597,6 +624,14 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ### DDSM HAT(B) 첫 통신 확인 (2026-06-14)
 - ESP32 모드 미설정으로 JSON 명령 무응답
 - `cmd 100 = 10 RPM` 스케일링 주의 필요
+
+### 두 모터가 동시에 회전 — ID 중복 (2026-06-16)
+- **증상:** `id=1`/`id=2` 어느 명령을 보내도 두 바퀴가 똑같이 회전
+- **원인:** 두 모터가 같은 ID. (두 모터를 동시에 연결한 채 ID를 변경하면 둘 다 같은 ID로 바뀜)
+- **추가 함정:** DDSM은 ID 변경 프레임(`T:10011`)을 **5번 연속** 받아야 저장 → 1회 전송 시 무시됨
+- **해결:** `motor_id_check.py` 추가 (조회 `T:10031` / 변경 `T:10011` 5회 반복).
+  모터를 1개씩만 연결해 각각 ID=1, ID=2 부여 후 전원 사이클
+- **참고:** `T:11002`는 HAT(B)에서 모터 Enable 명령 (HAT(A) 펌웨어의 `json_cmd.h`와 번호 매핑이 다름)
 
 ### 좌표계 떨림 (Double TF Conflict)
 - 모터 드라이버와 EKF 노드가 동시에 `odom→base_link` TF 발행
