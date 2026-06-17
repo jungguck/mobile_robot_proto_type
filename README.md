@@ -75,7 +75,7 @@ src/
 │   └── ReferenceGenerator.py
 │
 └── gui_py/
-    └── gui_py/main.py
+    └── gui_py/hardware_test.py          # 모터/IMU/LiDAR/Odom 통합 테스트 GUI
 ```
 
 ---
@@ -249,6 +249,29 @@ source ~/.bashrc
 
 > `--symlink-install` 필수: bridge_node.py가 소스 경로 기반으로 TubeMPCPlanner를 import합니다.  
 > `aws-robomaker-hospital-world`는 Gazebo 시뮬레이션 전용이므로 실제 로봇 구동 시 제외합니다.
+
+---
+
+## 통합 테스트 GUI (권장) — `hw_test`
+
+매번 터미널 여러 개에 STAGE 1~5 명령을 치는 대신, **모터·IMU·LiDAR·EKF 오도메트리를 창 하나에서** 켜고 확인할 수 있는 GUI입니다. SSH로 원격 제어/모니터링할 때 특히 편합니다.
+
+```bash
+ros_setup
+ros2 run gui_py hw_test
+```
+
+**기능:**
+- **드라이버 노드 Start/Stop**: Motor / IMU / LiDAR / EKF 각각 버튼으로 실행·종료. `●` 표시가 토픽 수신되면 초록, 끊기면 빨강.
+- **Motor**: 속도 슬라이더 + 전진/후진/좌·우회전/정지 버튼 → `/cmd_vel` 발행, `/odom_raw` 실측 v·ω 표시
+- **IMU**: 오도메트리 관련 값(yaw, gyro_z, acc_x, acc_y) + Hz. Start 직후 ~10초 캘리브레이션 안내(로봇 정지 유지)
+- **LiDAR**: `/scan` Hz, 포인트 수, 최소거리, 정면거리
+- **Odometry (`/odom`)**: EKF 융합 위치 `x/y/yaw` + 속도 `v/ω`. **EKF Start 전에 Motor·IMU 가 먼저 떠 있어야** `/odom` 이 발행됨.
+- 창을 닫거나(X) 터미널을 닫아도(`Ctrl-C`/SIGHUP) GUI가 띄운 드라이버 노드를 함께 종료.
+
+> `/odom` 확인 순서: **Motor Start → IMU Start(캘리브 10초) → EKF Start** → Odometry 패널에 값 표시.
+
+아래 STAGE 1~6은 GUI 없이 터미널에서 단계별로 디버깅할 때의 수동 절차입니다.
 
 ---
 
@@ -491,11 +514,11 @@ DDSM 모터는 공장 출고 시 ID가 **1 또는 2**로 설정돼 있고, RS485
 
 ```bash
 # 1. 모터를 '한 개만' HAT에 연결  (반드시 1개! 2개면 둘 다 같은 ID로 바뀜)
-# 2. HAT 전원 ON 후 현재 ID 조회
-python3 src/relayrobot_driver/relayrobot_driver/motor_id_check.py
+# 2. HAT 전원 ON 후 현재 ID 조회  (절대경로라 어느 폴더에서든 실행 가능)
+python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_id_check.py
 
 # 3. 이 모터를 원하는 ID로 변경 (예: 2번)
-python3 src/relayrobot_driver/relayrobot_driver/motor_id_check.py 2
+python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_id_check.py 2
 
 # 4. HAT 전원 OFF → ON  (전원 사이클당 1회만 변경 가능, 끄면 저장됨)
 # 5. 다른 모터로 교체 후 위 과정 반복하여 ID=1 부여
@@ -518,8 +541,8 @@ python3 src/relayrobot_driver/relayrobot_driver/motor_id_check.py 2
 #### 단독 통신 테스트
 
 ```bash
-# 두 모터가 각각 R 단독 / L 단독 / 전진 순서로 도는지 확인
-python3 src/relayrobot_driver/relayrobot_driver/motor_test_1.py
+# 두 모터가 각각 R 단독 / L 단독 / 전진 순서로 도는지 확인 (어느 폴더에서든 실행 가능)
+python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_test_1.py
 ```
 
 ### 모터 제어 지연
@@ -567,7 +590,7 @@ ros2 topic list          # Robot PC에서 노드 실행 중일 때 토픽이 보
 
 ### 모터 미응답
 ```bash
-python3 src/relayrobot_driver/relayrobot_driver/motor_test_1.py
+python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_test_1.py
 # "Connected" 출력 안 되면: USB → ESP32 모드 점퍼 → 전원 순서로 확인
 ```
 
