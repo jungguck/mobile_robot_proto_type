@@ -14,12 +14,12 @@ setup(
     zip_safe=True,
     maintainer='relayrobot',
     maintainer_email='todo@todo.com',
-    description='ROS2 GUI package for teleoperation and SLAM control',
+    description='ROS2 GUI package: motor/IMU/LiDAR hardware test',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'gui_py = gui_py.main:main',
+            'hw_test = gui_py.hardware_test:main',
         ],
     },
 )
