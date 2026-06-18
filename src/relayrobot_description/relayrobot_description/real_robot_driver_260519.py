@@ -8,14 +8,23 @@ from tf_transformations import quaternion_from_euler, euler_from_quaternion
 import math
 import numpy as np
 
-# 드라이버 파일
-from .motor_drive_1 import MotorDriver 
+from .motor_drive_1 import MotorDriver
+
 
 class RealRobotDriver260519(Node):
+    """
+    역할: 모터 시리얼 통신 + 바퀴 오도메트리 계산
+
+    발행 토픽:
+      /odom_raw    → EKF가 구독해서 IMU와 융합 → /odom 생성
+      /joint_states → robot_state_publisher가 구독해서 RViz 바퀴 시각화
+    구독 토픽:
+      /cmd_vel     → MPC 또는 teleop에서 속도 명령 수신
+    """
+
     def __init__(self):
         super().__init__('real_robot_driver_260519')
 
-        # 1. 모터 드라이버 연결
         try:
             self.driver = MotorDriver(port='/dev/motor')
             if self.driver.ser is None:
@@ -25,132 +34,119 @@ class RealRobotDriver260519(Node):
             self.get_logger().error(f"Motor connection failed: {e}")
             self.driver = None
 
-        # 2. 로봇 파라미터
-        self.wheel_radius = 0.05
-        self.wheel_base = 0.165
-        
-        # Odom 위치 변수
-        self.x = 0.0
-        self.y = 0.0
+        # 실측 후 조정 필요: 직진 1m 테스트로 검증 (README STAGE 4 참고)
+        self.wheel_radius = 0.05   # 단위: m
+        self.wheel_base   = 0.165  # 두 바퀴 접지면 간격, 단위: m
+
+        # 적분으로 누적되는 위치 (노드 시작 시 0으로 초기화)
+        self.x     = 0.0
+        self.y     = 0.0
         self.theta = 0.0
 
-        # Joint State 변수
-        self.left_wheel_angle = 0.0
+        self.left_wheel_angle  = 0.0
         self.right_wheel_angle = 0.0
         self.joint_names = ['left_wheel_joint', 'right_wheel_joint']
 
         self.last_time = self.get_clock().now()
 
-        # 3. Publisher & Subscriber
-        # EKF를 사용할 것이므로 odom 토픽 이름은 odom_unfiltered로 변경하거나 그대로 둬도 됨.
-        # robot_localization에서 odom을 구독하도록 설정했음. 여기선 그냥 odom 또는 raw_odom 발행.
-        # launch.py에서 EKF가 odometry/filtered를 odom으로 리맵핑함. 
-        # 드라이버는 'odom_raw' 또는 'wheel/odom' 등으로 발행하고, EKF가 그걸 구독해야 충돌이 없음.
-        # 하지만 ekf.yaml을 보니 odom0: /odom 으로 설정되어 있음.
-        # 즉 EKF가 /odom을 구독하고, odometry/filtered를 뱉으면, launch에서 odom으로 리맵하면 무한루프.
-        # EKF가 odom_raw를 구독하게 하거나, 드라이버가 odom_raw를 쏘게 하고 ekf.yaml을 고쳐야 함.
-        # 일단 여기선 'odom_raw'로 쏘도록 변경하자.
-        self.odom_pub = self.create_publisher(Odometry, 'odom_raw', 10)
-        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
+        # /odom_raw: 순수 바퀴 인코더 odom. EKF가 이걸 받아 IMU와 융합 → /odom 출력
+        # /odom을 직접 발행하지 않는 이유: EKF 출력과 토픽 이름 충돌 방지
+        self.odom_pub  = self.create_publisher(Odometry,   'odom_raw',     10)
+        self.joint_pub = self.create_publisher(JointState,  '/joint_states', 10)
 
         self.subscription = self.create_subscription(
-            Twist,
-            'cmd_vel',
-            self.cmd_vel_callback,
-            10
+            Twist, 'cmd_vel', self.cmd_vel_callback, 10
         )
-         
-        # 4. Timer (0.1초마다 실행)
-        self.timer_period = 0.1 
-        self.timer = self.create_timer(self.timer_period, self.timer_callback)
 
+        # 10Hz: 시리얼 레이턴시(10ms)와 맞춘 주기
+        self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info("Real Robot Driver Started (Wheel Odom Only)...")
 
     def cmd_vel_callback(self, msg):
-        if not self.driver: return
+        if not self.driver:
+            return
         self.driver.drive(msg.linear.x, msg.angular.z)
 
     def timer_callback(self):
-        if not self.driver: return
+        if not self.driver:
+            return
 
-        # 1. RPM 읽기
         rpm_L, rpm_R = self.driver.read_feedback()
-        rpm_L = -rpm_L  # 왼쪽 모터는 drive()에서 -cmd로 전송하므로 피드백도 부호 반전 필요
+        # 왼쪽 모터는 drive()에서 부호 반전해서 전송하므로 피드백도 반전
+        rpm_L = -rpm_L
 
-        # 2. RPM -> 선속도(m/s) 변환
-        # spd 피드백은 실제 RPM의 10배 (cmd 100 = 10 RPM), 따라서 /600 = /60/10
+        # /600 = /10(DDSM 스케일: cmd100=10RPM) × /60(RPM→RPS)
+        # 결과: 바퀴 선속도(m/s)
         vl = (rpm_L / 600.0) * (2 * math.pi * self.wheel_radius)
         vr = (rpm_R / 600.0) * (2 * math.pi * self.wheel_radius)
 
-        # 3. 로봇 속도
-        v = (vl + vr) / 2.0
-        w_enc = (vr - vl) / self.wheel_base # 엔코더 기반 각속도
+        # 차동 구동 기구학: 로봇 중심 선속도 / 각속도
+        v     = (vl + vr) / 2.0
+        w_enc = (vr - vl) / self.wheel_base
 
-        # 4. 시간 간격(dt)
         current_time = self.get_clock().now()
         dt = (current_time - self.last_time).nanoseconds / 1e9
         self.last_time = current_time
 
-        # 5. Joint State 계산 (시각화용)
+        # RViz 바퀴 회전 시각화용 (제어에는 안 쓰임)
         ang_vel_L = vl / self.wheel_radius
         ang_vel_R = vr / self.wheel_radius
-        self.left_wheel_angle += ang_vel_L * dt
+        self.left_wheel_angle  += ang_vel_L * dt
         self.right_wheel_angle += ang_vel_R * dt
 
         joint_msg = JointState()
         joint_msg.header.stamp = current_time.to_msg()
-        joint_msg.name = self.joint_names
+        joint_msg.name     = self.joint_names
         joint_msg.position = [self.left_wheel_angle, self.right_wheel_angle]
         joint_msg.velocity = [ang_vel_L, ang_vel_R]
         self.joint_pub.publish(joint_msg)
 
-        # 6. 위치 적분 (바퀴 오도메트리 전용)
+        # 오일러 적분: 현재 방향(theta) 기준으로 x, y 누적
         self.theta += w_enc * dt
+        self.x     += v * math.cos(self.theta) * dt
+        self.y     += v * math.sin(self.theta) * dt
 
-        # X, Y는 바퀴 속도와 현재 방향(Theta)으로 계산
-        self.x += v * math.cos(self.theta) * dt
-        self.y += v * math.sin(self.theta) * dt
-
-        # 7. Odom 퍼블리시
         self.publish_odom(v, w_enc)
 
     def publish_odom(self, v, w):
         q = quaternion_from_euler(0, 0, self.theta)
 
         odom = Odometry()
-        odom.header.stamp = self.get_clock().now().to_msg()
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base_link"
+        odom.header.stamp    = self.get_clock().now().to_msg()
+        odom.header.frame_id = "odom"       # 기준 좌표계
+        odom.child_frame_id  = "base_link"  # 로봇 몸통
 
-        odom.pose.pose.position.x = self.x
-        odom.pose.pose.position.y = self.y
+        odom.pose.pose.position.x    = self.x
+        odom.pose.pose.position.y    = self.y
         odom.pose.pose.orientation.x = q[0]
         odom.pose.pose.orientation.y = q[1]
         odom.pose.pose.orientation.z = q[2]
         odom.pose.pose.orientation.w = q[3]
 
-        odom.twist.twist.linear.x = v
+        odom.twist.twist.linear.x  = v
         odom.twist.twist.angular.z = w
 
-        # 바퀴 오차 설정
+        # covariance: EKF에게 "이 데이터를 얼마나 믿어도 되는지" 알려주는 값
+        # 값이 클수록 불확실 → EKF가 이 센서를 덜 믿고 IMU를 더 반영
         odom.pose.covariance = [
             0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.05, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.05, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.01, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 0.01, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.1
+            0.0, 0.0, 0.0, 0.0, 0.0,  0.1,
         ]
         odom.twist.covariance = odom.pose.covariance[:]
 
         self.odom_pub.publish(odom)
 
-        # TF Broadcast 제거 (ekf_node가 담당)
+        # TF(odom→base_link)는 ekf_node가 담당 — 여기서 발행하면 이중 충돌
 
     def stop_robot(self):
         if self.driver:
             self.driver.stop()
             self.driver.close()
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -163,6 +159,7 @@ def main(args=None):
         node.stop_robot()
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

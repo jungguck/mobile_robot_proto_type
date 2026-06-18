@@ -9,24 +9,38 @@ from rclpy.node import Node
 
 
 class AStarPlanner(Node):
+    """
+    역할: Cartographer가 만든 지도(/map) + 현재 위치(/odom) + 목표(/mpc_goal)를
+          받아서 A* 알고리즘으로 경로 계산 → /global_path 발행
+
+    구독 토픽:
+      /map      → Cartographer SLAM이 생성한 격자 지도 (OccupancyGrid)
+      /odom     → 현재 로봇 위치
+      /mpc_goal → 목표 좌표 (bridge_node와 동일 토픽 공유)
+    발행 토픽:
+      /global_path → 계산된 경유점 리스트 → bridge_node가 MPC 참조 궤적으로 사용
+    """
+
     def __init__(self):
         super().__init__('mpc_tubempc_path_planner')
 
-        self.map = None
+        self.map      = None
         self.map_info = None
-        self.goal = None
-        self.pose = None
+        self.goal     = None
+        self.pose     = None
 
-        self.create_subscription(OccupancyGrid, 'map', self.map_callback, 10)
-        self.create_subscription(PoseStamped, 'mpc_goal', self.goal_callback, 10)
-        self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
+        self.create_subscription(OccupancyGrid, 'map',      self.map_callback,  10)
+        self.create_subscription(PoseStamped,   'mpc_goal', self.goal_callback, 10)
+        self.create_subscription(Odometry,      'odom',     self.odom_callback, 10)
         self.path_pub = self.create_publisher(Path, 'global_path', 10)
 
+        # 0.5초마다 경로 재계획 (로봇이 이동하면 시작점이 바뀌므로)
         self.timer = self.create_timer(0.5, self.plan_callback)
         self.get_logger().info('A* Path Planner initialized.')
 
     def map_callback(self, msg: OccupancyGrid):
-        self.map = np.array(msg.data, dtype=np.int8).reshape((msg.info.height, msg.info.width))
+        # OccupancyGrid: 0=빈공간, 100=장애물, -1=미탐색
+        self.map      = np.array(msg.data, dtype=np.int8).reshape((msg.info.height, msg.info.width))
         self.map_info = msg.info
         self.get_logger().info('Map received.')
 
@@ -42,8 +56,9 @@ class AStarPlanner(Node):
             return
 
         start = self.world_to_map(self.pose.position.x, self.pose.position.y)
-        goal = self.world_to_map(self.goal.position.x, self.goal.position.y)
+        goal  = self.world_to_map(self.goal.position.x, self.goal.position.y)
 
+        # 시작/목표가 장애물 위에 있으면 경로 계획 불가
         if not self.is_free(start) or not self.is_free(goal):
             self.get_logger().warn('Start or goal cell is not free.')
             return
@@ -53,15 +68,15 @@ class AStarPlanner(Node):
             self.get_logger().warn('Path planning failed.')
             return
 
-        path_msg = Path()
-        path_msg.header.frame_id = 'map'
+        path_msg             = Path()
+        path_msg.header.frame_id = 'map'  # 경로는 map 좌표계 기준
         path_msg.header.stamp = self.get_clock().now().to_msg()
 
         for mx, my in path:
-            pose = PoseStamped()
-            pose.header = path_msg.header
+            pose            = PoseStamped()
+            pose.header     = path_msg.header
             pose.pose.position.x, pose.pose.position.y = self.map_to_world(mx, my)
-            pose.pose.position.z = 0.0
+            pose.pose.position.z    = 0.0
             pose.pose.orientation.w = 1.0
             path_msg.poses.append(pose)
 
@@ -69,20 +84,23 @@ class AStarPlanner(Node):
         self.get_logger().info(f'Published global path ({len(path)} points).')
 
     def world_to_map(self, x: float, y: float):
+        """월드 좌표(m) → 격자 인덱스(픽셀)."""
         origin = self.map_info.origin.position
-        res = self.map_info.resolution
-        mx = int((x - origin.x) / res)
-        my = int((y - origin.y) / res)
+        res    = self.map_info.resolution
+        mx     = int((x - origin.x) / res)
+        my     = int((y - origin.y) / res)
         return mx, my
 
     def map_to_world(self, mx: int, my: int):
+        """격자 인덱스 → 월드 좌표 중심점."""
         origin = self.map_info.origin.position
-        res = self.map_info.resolution
-        x = origin.x + (mx + 0.5) * res
-        y = origin.y + (my + 0.5) * res
+        res    = self.map_info.resolution
+        x      = origin.x + (mx + 0.5) * res
+        y      = origin.y + (my + 0.5) * res
         return x, y
 
     def is_free(self, cell):
+        """셀이 통행 가능한지: -1(미탐색)이거나 50 미만(빈공간)이면 통과 가능."""
         x, y = cell
         if x < 0 or y < 0 or x >= self.map_info.width or y >= self.map_info.height:
             return False
@@ -90,21 +108,26 @@ class AStarPlanner(Node):
         return value == -1 or value < 50
 
     def neighbors(self, cell):
+        """8방향 이웃 셀과 이동 비용 반환 (대각선은 √2 비용)."""
         x, y = cell
-        for dx, dy, cost in [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
-                             (-1, -1, math.sqrt(2)), (-1, 1, math.sqrt(2)), (1, -1, math.sqrt(2)), (1, 1, math.sqrt(2))]:
+        for dx, dy, cost in [
+            (-1,  0, 1.0), ( 1,  0, 1.0), ( 0, -1, 1.0), ( 0,  1, 1.0),
+            (-1, -1, math.sqrt(2)), (-1,  1, math.sqrt(2)),
+            ( 1, -1, math.sqrt(2)), ( 1,  1, math.sqrt(2)),
+        ]:
             nx, ny = x + dx, y + dy
             if 0 <= nx < self.map_info.width and 0 <= ny < self.map_info.height and self.is_free((nx, ny)):
                 yield (nx, ny), cost
 
     def heuristic(self, a, b):
+        """유클리드 거리 휴리스틱."""
         return math.hypot(a[0] - b[0], a[1] - b[1])
 
     def a_star(self, start, goal):
+        """A* 탐색. 경로 없으면 None 반환."""
         open_set = [(0.0, start)]
         came_from = {}
-        g_score = {start: 0.0}
-        f_score = {start: self.heuristic(start, goal)}
+        g_score   = {start: 0.0}
 
         while open_set:
             _, current = heapq.heappop(open_set)
@@ -115,9 +138,9 @@ class AStarPlanner(Node):
                 tentative_g = g_score[current] + cost
                 if tentative_g < g_score.get(neighbor, float('inf')):
                     came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score[neighbor] = tentative_g + self.heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
+                    g_score[neighbor]   = tentative_g
+                    f_score             = tentative_g + self.heuristic(neighbor, goal)
+                    heapq.heappush(open_set, (f_score, neighbor))
 
         return None
 
