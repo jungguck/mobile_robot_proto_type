@@ -15,7 +15,7 @@ class RealRobotDriver(Node):
         super().__init__('real_robot_driver')
 
         # ROS 2 Parameters
-        self.declare_parameter('port', '/dev/ttyACM0')
+        self.declare_parameter('port', '/dev/motor')
         self.declare_parameter('wheel_radius', 0.05) # Aligning with URDF (diameter 0.1)
         self.declare_parameter('wheel_base', 0.165)  # Aligning with URDF (separation 0.165)
 

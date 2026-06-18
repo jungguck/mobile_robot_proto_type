@@ -17,7 +17,7 @@ class RealRobotDriver260519(Node):
 
         # 1. 모터 드라이버 연결
         try:
-            self.driver = MotorDriver(port='/dev/ttyACM0') 
+            self.driver = MotorDriver(port='/dev/motor')
             if self.driver.ser is None:
                 raise Exception("Serial connection returned None")
             self.get_logger().info("DDSM400 Motor Connected Successfully!")

@@ -45,6 +45,53 @@ graph TD
 
 ---
 
+## 개발 로드맵
+
+```
+Phase 0 ✅  하드웨어 검증      Motor / IMU / LiDAR 단독 테스트 + GUI
+Phase 1 ▶  Odometry 정밀 검증  EKF 융합 odom 정확도 확인 → SLAM 입력 기준 확보
+Phase 2    Cartographer SLAM   지도 생성 + map→odom TF 안정성 확인
+Phase 3    경로 계획 검증       A* 경로 계획기 + /global_path 토픽 시각화
+Phase 4    Tube-MPC 통합       짧은 구간 추종 → 파라미터 튜닝
+Phase 5    완전 자율주행        전체 파이프라인 통합 + 성능 검증
+```
+
+### Phase 1 — Odometry 정밀 검증 (현재)
+
+| 항목 | 확인 내용 | 완료 기준 |
+|------|-----------|-----------|
+| RPM 팩터 | `/600.0` 변환 실측 | 1m 직진 → `x ≈ 0.9~1.1` |
+| wheel_base | `0.165m` 실측 대조 | 90° 회전 → `yaw ≈ 1.4~1.7 rad` |
+| EKF 융합 | IMU 보정 효과 | 직진 후 yaw drift 없음 |
+| TF tree | `odom→base_link` 발행 | `tf2_echo` 값 출력 |
+
+### Phase 2 — Cartographer SLAM
+
+- **입력:** `/odom` (EKF 융합) + `/scan` + TF tree
+- **핵심 검증:** `map→odom` TF 발행 여부, 지도 닫힘(loop closure) 확인
+- **산출물:** `~/robot_map.yaml` + `~/robot_map.pgm` 저장
+- **이슈 예상:** `my_cartographer.lua` 튜닝 (특히 실내 공간 크기에 맞는 `map_resolution`)
+
+### Phase 3 — 경로 계획 검증
+
+- **입력:** `/map` + 목표 좌표(`/mpc_goal`)
+- **핵심 검증:** `/global_path`에 경로 토픽 발행 확인, 원격 PC RViz에서 경로 시각화
+- **이슈 예상:** 지도 해상도와 A* 격자 크기 불일치 → `path_planner.py` 파라미터 조정
+
+### Phase 4 — Tube-MPC 통합
+
+- **1차:** 1~2m 직선 경로 추종 (짧게 먼저)
+- **2차:** 곡선 경로 추종 + 파라미터 튜닝 (`horizon`, `velocity_limit`, `omega_limit`)
+- **이슈 예상:** QP 풀이 발산 → `horizon:=4`, `velocity_limit:=0.1` 로 줄여서 시작
+
+### Phase 5 — 완전 자율주행
+
+- 전체 런치 단일 파일화
+- 장애물 재계획 확인
+- 비상 정지(`/cmd_vel` zeroing) 안전 기능
+
+---
+
 ## 파일 구조
 
 ```
@@ -375,27 +422,106 @@ rviz2
 
 ### STAGE 4: Odometry (EKF 융합) 테스트
 
-**목표:** 바퀴 오도메트리 + IMU → EKF 융합 → /odom 발행, TF 트리 완성
+**목표:** 바퀴 오도메트리 + IMU → EKF 융합 → /odom 발행, TF 트리 완성  
+**선행 조건:** STAGE 1, 2 통과 (모터·IMU 정상 동작 확인)
 
-**선행 조건:** STAGE 1, 2, 3 통과
+> 헤드리스(모니터 없음) 환경 기준. SSH 창 2개로 진행합니다.  
+> `tmux`가 있으면 한 SSH 세션에서 창 분할 가능: `tmux new` → `Ctrl-b %`
+
+---
+
+#### Step 1. 노드 기동 (SSH 창 1)
 
 ```bash
-# [터미널 1] 전체 하드웨어 launch
+# 먼저 빌드 (ebimu_pkg covariance 수정 반영)
+cd ~/mobile_robot_proto_type
+colcon build --packages-select ebimu_pkg relayrobot_description
+source install/setup.bash
+
+# 전체 하드웨어 launch (Motor + IMU + EKF)
 ros2 launch relayrobot_description real_robot_260519.launch.py
-
-# [터미널 2] 확인
-ros2 topic list          # /odom, /odom_raw, /ebimu_data, /scan 모두 보여야 함
-ros2 topic hz /odom      # 목표: ~30 Hz
-ros2 run tf2_ros tf2_echo odom base_link
-
-# [터미널 3] 직진 1m 후 위치 확인
-ros2 topic echo /odom --field pose.pose.position
 ```
 
-**성공 기준:**
-- `/odom` 30 Hz 발행
-- `tf2_echo odom base_link`에서 transform 출력
-- 1m 직진 시 `position.x ≈ 0.9~1.1`
+> IMU 노드는 시작 직후 **10초 캘리브레이션**합니다. 이 시간 동안 로봇을 움직이지 마세요.  
+> 로그에 `Calibration done!` 출력 후 다음 단계로 진행합니다.
+
+---
+
+#### Step 2. 토픽 생존 확인 (SSH 창 2)
+
+```bash
+# 세 토픽 모두 살아있어야 함
+ros2 topic hz /odom_raw    # 목표: 10 Hz  (바퀴 인코더)
+ros2 topic hz /ebimu_data  # 목표: 50 Hz  (IMU)
+ros2 topic hz /odom        # 목표: 30 Hz  (EKF 출력)
+
+# 정지 상태 sanity check: x/y/yaw 모두 0에 가까워야 함
+ros2 topic echo /odom --once
+```
+
+---
+
+#### Step 3. 직진 1m 테스트 — RPM 팩터 검증
+
+```bash
+# 0.2 m/s × 50회(5초) ≈ 1m 전진
+ros2 topic pub /cmd_vel geometry_msgs/Twist \
+  "{linear: {x: 0.2}, angular: {z: 0.0}}" --rate 10 --times 50
+
+# 정지 후 위치 확인
+ros2 topic echo /odom --field pose.pose.position --once
+```
+
+**기대값:** `x ≈ 0.9~1.1`  
+`x`가 크게 다르면 `real_robot_driver_260519.py:82`의 `/600.0` 팩터 조정 필요:
+```
+실측값이 0.5m → 팩터를 /300.0 으로 변경
+실측값이 1.5m → 팩터를 /900.0 으로 변경
+```
+
+---
+
+#### Step 4. 제자리 회전 90° 테스트 — wheel_base 검증
+
+```bash
+# odom 초기화를 위해 드라이버 재시작 권장 (SSH 창 1 Ctrl-C 후 재기동)
+
+# 0.5 rad/s × 63회(6.3초) ≈ π/2 rad (90°)
+ros2 topic pub /cmd_vel geometry_msgs/Twist \
+  "{linear: {x: 0.0}, angular: {z: 0.5}}" --rate 10 --times 63
+
+ros2 topic echo /odom --field pose.pose.orientation --once
+# orientation → yaw 계산:
+#   yaw = 2 * atan2(orientation.z, orientation.w)
+#   기대값: 1.4~1.7 rad (80°~97°)
+```
+
+`yaw`가 크게 다르면 `real_robot_driver_260519.py:30`의 `wheel_base` 수정:
+```python
+# 현재 0.165 → 줄자로 바퀴 접지면 간격 실측 후 교체
+self.wheel_base = 0.165
+```
+
+---
+
+#### Step 5. TF 트리 확인
+
+```bash
+ros2 run tf2_ros tf2_echo odom base_link
+# translation / rotation 숫자가 출력되면 EKF가 TF 발행 중 → 정상
+```
+
+---
+
+**성공 기준 요약:**
+
+| 테스트 | 통과 기준 | 실패 시 |
+|--------|-----------|---------|
+| `/odom` Hz | 30 Hz | EKF 설정 문제 |
+| 정지 sanity | x≈0, y≈0, yaw≈0 | 드라이버 초기화 이슈 |
+| 직진 1m | `x = 0.9~1.1` | `/600.0` 팩터 조정 |
+| 회전 90° | `yaw = 1.4~1.7 rad` | `wheel_base` 실측 후 수정 |
+| TF echo | transform 출력 | EKF 미기동 or ekf.yaml 경로 오류 |
 
 **실패 체크리스트:**
 ```
@@ -403,6 +529,7 @@ ros2 topic echo /odom --field pose.pose.position
 [ ] /odom_raw 발행 확인 (STAGE 1 선행)
 [ ] ekf.yaml 경로:
     ls $(ros2 pkg prefix relayrobot_description)/share/relayrobot_description/config/ekf.yaml
+[ ] IMU 캘리브레이션 완료 로그 확인: "Calibration done!"
 ```
 
 ---

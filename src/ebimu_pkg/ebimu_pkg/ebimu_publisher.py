@@ -112,16 +112,31 @@ class EbimuPublisher(Node):
             pitch = math.radians(d[1])
             yaw   = math.radians(yaw_deg)
             msg.orientation = euler_to_quaternion(roll, pitch, yaw)
+            msg.orientation_covariance = [
+                0.0025, 0.0, 0.0,
+                0.0, 0.0025, 0.0,
+                0.0, 0.0, 0.0025,
+            ]
 
             # Linear acceleration (바이어스 제거, G → m/s²)
             msg.linear_acceleration.x = (d[3] - self.bias_accx) * 9.80665
             msg.linear_acceleration.y = (d[4] - self.bias_accy) * 9.80665
             msg.linear_acceleration.z = d[5] * 9.80665  # z는 중력 포함 그대로
+            msg.linear_acceleration_covariance = [
+                0.04, 0.0, 0.0,
+                0.0, 0.04, 0.0,
+                0.0, 0.0, 0.04,
+            ]
 
             # Angular velocity (바이어스 제거, deg/s → rad/s)
             msg.angular_velocity.x = math.radians(d[6])
             msg.angular_velocity.y = math.radians(d[7])
             msg.angular_velocity.z = math.radians(d[8] - self.bias_gyroz)
+            msg.angular_velocity_covariance = [
+                0.001, 0.0, 0.0,
+                0.0, 0.001, 0.0,
+                0.0, 0.0, 0.001,
+            ]
 
             self.publisher.publish(msg)
 

@@ -4,7 +4,7 @@ import time
 import math
 
 class MotorDriver:
-    def __init__(self, port='/dev/ttyACM0', baudrate=115200):
+    def __init__(self, port='/dev/motor', baudrate=115200):
         self.MOTOR_ID_L = 2
         self.MOTOR_ID_R = 1
         self.wheel_radius = 0.035  
