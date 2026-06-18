@@ -196,8 +196,17 @@ sudo apt update && sudo apt install -y \
 ```
 
 Python 의존 패키지:
+
+> **주의:** ROS 2 Jazzy는 **시스템 Python 3.12**(`/usr/bin/python3`)에 묶여 있습니다.
+> conda 환경(3.11/3.13 등)에서는 `rclpy` import가 실패하므로, 반드시 conda를 빠져나온 뒤
+> 시스템 파이썬에 설치하세요. (`conda config --set auto_activate_base false` 권장)
+
 ```bash
-pip3 install numpy scipy cvxpy polytope osqp cvxopt transforms3d
+conda deactivate   # conda 밖(시스템 3.12)으로
+
+# Ubuntu 24.04는 시스템 pip이 보호돼 있어 --break-system-packages 필요
+pip3 install --break-system-packages --user \
+  numpy scipy cvxpy polytope osqp cvxopt transforms3d
 ```
 
 ---
@@ -594,7 +603,7 @@ ros2 run mpc_tubempc_bridge mpc_tubempc_bridge \
   -p use_global_path:=true \
   -p velocity_limit:=0.2 \
   -p omega_limit:=1.0 \
-  -p horizon:=6
+  -p horizon:=4
 
 # [터미널 5] 목표 좌표 발행 (1~2m 이내 짧은 거리부터)
 ros2 topic pub /mpc_goal geometry_msgs/msg/PoseStamped \
