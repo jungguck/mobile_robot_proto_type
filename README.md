@@ -799,3 +799,30 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ### MPC "장님" 주행
 - 제어기가 목표치만 던지고 현재 위치 피드백 없음
 - 해결: `/odom` 구독 추가, 실시간 Distance/Angle Error 피드백 루프 완성
+
+### Tube-MPC가 로봇을 전혀 움직이지 못함 (2026-06-18)
+**증상:** STAGE 6 실행해도 `/cmd_vel`이 항상 0, 로봇 정지. 또는 `MPC QP failed` 로그 반복.
+
+**원인 (4중 복합):**
+1. **horizon 불일치** — `construct_augmentemd_model`이 4스텝(A0~A3) 하드코딩인데
+   기본값·README가 `horizon=6` → 행렬 차원 불일치로 QP가 매 사이클 크래시.
+2. **추종오차가 구조적으로 0** — 참조 궤적 `qRef[:,0]`을 매 사이클 현재 위치로
+   재설정 → `e_k = compute_error(current, current) = 0` → 비용 `f_qp=0` → `u_mpc=0`.
+3. **피드포워드 누락** — 참조 입력 `uRef`(목표로 향하는 v,ω)를 계산만 하고
+   `cmd_vel`에 안 더함. `cmd = u_act ≈ 0`.
+4. **tube 보정 무효 + 제약 공집합** — ancillary 항 `K(e_act−e_nom)`이 항상 0열(0)만
+   읽어 무효. 게다가 `R=0.01`로 LQR gain `K≈10` → tube 타이트닝량 `K·e`(≈2~4)가
+   입력 한계(±0.5)를 초과 → 타이트닝된 입력집합이 공집합 → QP 영구 infeasible.
+
+**해결:**
+- horizon을 4로 정렬 (기본값/docstring/README STAGE 6)
+- 참조를 **월드 프레임**에 고정: `qRef[:,0]=최근접 경로점`, 이후 호라이즌은
+  경로를 arc-length만큼 전진 → 실제 cross-track/heading 오차 발생
+- **피드포워드 복원**: `cmd = uRef + 보정량`
+- tube 명목 상태 `e_nom`을 **사이클 간 전파**(`e_nom = A0·e_nom + B·u_nom`),
+  목표/경로 갱신 시 리셋 → ancillary 실제 작동
+- 목표 반경(`goal_tolerance`) 내 진입·QP 실패 시 zero stop
+- 플래너 튜닝: `R: 0.01→5.0`(K 완화), `tube e_min: ±0.2→±0.05` → `K·e < 입력한계`
+  보장으로 QP feasibility 확보
+- **검증:** 실제 `TubeMPCPlanner`로 1사이클 — 경로 위 `cmd=[0.20, 0.00]`,
+  경로 이탈 시 QP가 풀려 경로 쪽으로 조향(`cmd=[0.12, -0.32]`)
