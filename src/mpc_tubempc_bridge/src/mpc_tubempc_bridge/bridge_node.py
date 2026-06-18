@@ -210,14 +210,17 @@ class MPCBridgeNode(Node):
         x_min = np.array([-2.0, -2.0, -0.3])   # 허용 오차 범위 (x_err, y_err, θ_err)
         u_min = np.array([-0.5, -0.5])           # 최소 제어입력 (v, ω)
         w_min = np.array([-0.1, -0.1, -0.1])     # 허용 외란 범위
-        e_min = np.array([-0.2, -0.2, -0.2])     # tube 크기
+        e_min = np.array([-0.05, -0.05, -0.05])  # tube 크기 (작게: 타이트닝된 입력집합이
+                                                 #            공집합이 되지 않도록)
 
         v0 = 0.05
         w0 = 0.0
         A  = self._A_matrix(v0, w0)
         B  = np.array([[Ts, 0.0], [0.0, 0.0], [0.0, Ts]])
         Q  = 100 * np.eye(3)   # 상태 오차 가중치 (클수록 경로 추종 우선)
-        R  = 0.01 * np.eye(2)  # 입력 가중치 (클수록 부드러운 입력 우선)
+        R  = 5.0 * np.eye(2)   # 입력 가중치. 작으면 LQR gain K가 과격(≈10)해져
+                               # tube 타이트닝량(K·e)이 입력 한계를 넘어 QP가 항상
+                               # infeasible해진다 → 5.0으로 K를 완화해 feasibility 확보
         P  = self._solve_are(A, B, Q, R)
         K  = np.linalg.inv(R + B.T @ P @ B) @ (B.T @ P @ A)
 
