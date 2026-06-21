@@ -72,6 +72,42 @@ Phase 5    완전 자율주행        전체 파이프라인 통합 + 성능 검
 - **산출물:** `~/robot_map.yaml` + `~/robot_map.pgm` 저장
 - **이슈 예상:** `my_cartographer.lua` 튜닝 (특히 실내 공간 크기에 맞는 `map_resolution`)
 
+#### ⚠️ odom 품질이 SLAM을 좌우하는 이유 (Phase 1을 먼저 하는 이유)
+
+SLAM에서 **odom은 "정답"이 아니라 scan 매칭의 "초기 추측값(prior)"** 입니다.
+Cartographer는 odom으로 "대충 이만큼 움직였겠다"를 예측하고, **그 근처에서 scan을
+맵에 맞춰** 미세조정합니다. 그래서 odom이 *전역적으로 정확*할 필요는 없지만
+**국소적으로 매끄럽고(점프 없이) + 스케일이 맞고 + yaw가 안정적**이어야 합니다.
+
+**불안정 유형별로 scan이 잡아주는 정도가 다릅니다:**
+
+| odom 불안정 유형 | scan이 보정하나? |
+|------------------|------------------|
+| 느린 드리프트 / 스케일 오차 (1m인데 0.9m) | ✅ 매 프레임 맵에 맞춰 보정 + loop closure가 누적분 사후 교정 |
+| 고주파 노이즈 / 순간 점프 (jitter, 튐) | ⚠️ 초기 추측이 확 틀어지면 scan이 **엉뚱한 위치로 수렴** |
+| yaw(회전) 오차 | ❌ 가장 치명적 — 위치 오차보다 scan 매칭을 훨씬 크게 망침 |
+
+**보정 장치 (`my_cartographer.lua`):**
+- `use_online_correlative_scan_matching = true` → Ceres 정밀매칭 *전에* 넓은 범위를
+  brute-force 탐색 → odom 추측이 좀 틀려도 복구 (불안정 odom의 1차 방어선, CPU 더 씀)
+- Ceres scan matcher → odom 추측 ↔ scan을 가중치로 절충
+- Global SLAM (pose graph + loop closure) → 누적 드리프트를 사후 교정
+
+**꼭 기억할 두 가지:**
+1. 이 설정은 `use_imu_data = false` 라 **Cartographer가 IMU를 직접 안 씁니다.** IMU는
+   오직 EKF → `/odom` 경로로만 들어가요. 즉 **(바퀴+IMU yaw 융합) odom 품질 = SLAM
+   prior 품질** 그 자체. odom이 불안정하면 그대로 SLAM 입력으로 갑니다.
+2. **특징 빈약 환경**(긴 직선 복도, 텅 빈 큰 방, 유리벽, LiDAR `max_range` 8m 밖)에서는
+   scan이 위치를 못 고정해 **odom에 거의 전적으로 의존** → 이때 odom 불안정이 그대로 드러남.
+
+**튜닝 포인트:**
+- SLAM이 odom 때문에 흔들리면 → `TRAJECTORY_BUILDER_2D.ceres_scan_matcher` 의
+  `translation_weight`/`rotation_weight` 를 낮춰 scan을 더 신뢰.
+- 특징 없는 복도에서 미끄러지면 → 위 weight를 올려 odom을 더 신뢰.
+
+> **한 줄 요약:** 느린 드리프트는 scan이 잡아주지만 **odom의 점프·yaw 오차는 못 잡는다.**
+> 그래서 Phase 1에서 odom을 매끄럽게(RPM 팩터·wheel_base 캘리브) 만드는 게 SLAM 안정성의 전제다.
+
 ### Phase 3 — 경로 계획 검증
 
 - **입력:** `/map` + 목표 좌표(`/mpc_goal`)
