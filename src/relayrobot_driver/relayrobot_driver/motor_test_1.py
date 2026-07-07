@@ -19,7 +19,7 @@ BAUDRATE = 115200
 MOTOR_ID_L = 2
 MOTOR_ID_R = 1
 
-CMD = 10          # 목표 RPM (DDSM115는 cmd 값 = RPM)
+CMD = 100          # 목표 RPM (DDSM115는 cmd 값 = RPM)
 
 
 def send_json(ser, data):

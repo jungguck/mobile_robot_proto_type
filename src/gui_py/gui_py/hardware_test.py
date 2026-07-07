@@ -123,7 +123,7 @@ class HardwareTestNode(Node):
     """
 
     def __init__(self):
-        super().__init__('hardware_test_gui')
+        super().__init__('hardware_test_gui') # 이건 노드이름 
 
         # ── 최신 센서 값 캐시 ────────────────────────────────────────────
         self.odom = {'v': 0.0, 'w': 0.0}                       # /odom_raw 실측 속도

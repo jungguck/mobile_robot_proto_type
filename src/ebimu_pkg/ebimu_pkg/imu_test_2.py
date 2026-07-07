@@ -1,7 +1,9 @@
+# 260614 / 바이어스 캘리브레이션 + EKF에 필요한 필드만 출력
+
 import serial
 import time
 
-PORT = '/dev/ttyimu'
+PORT = '/dev/ttyUSB0'
 BAUDRATE = 115200
 CALIB_SECONDS = 10
 
