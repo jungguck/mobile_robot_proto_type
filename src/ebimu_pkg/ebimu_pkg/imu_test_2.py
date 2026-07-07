@@ -3,7 +3,7 @@
 import serial
 import time
 
-PORT = '/dev/ttyUSB0'
+PORT = '/dev/ttyimu'
 BAUDRATE = 115200
 CALIB_SECONDS = 10
 

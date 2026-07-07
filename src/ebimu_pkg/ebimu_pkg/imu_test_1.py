@@ -3,7 +3,7 @@
 import serial
 import time
 
-PORT = '/dev/ttyUSB0'
+PORT = '/dev/ttyimu'
 BAUDRATE = 115200
 
 # EBIMU format: *ROLL,PITCH,YAW,ACCX,ACCY,ACCZ,GYROX,GYROY,GYROZ
