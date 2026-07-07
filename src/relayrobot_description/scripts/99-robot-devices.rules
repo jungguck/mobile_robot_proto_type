@@ -1,3 +1,21 @@
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="10c3d9b1eb7def1193aa201cedd322a4", MODE:="0666", SYMLINK+="rplidar"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", MODE:="0666", SYMLINK+="ttyimu"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{serial}=="5972062126", MODE:="0666", SYMLINK+="motor"
+# 로봇 USB 장치 고정 규칙 (udev)
+# ------------------------------------------------------------------
+# 시리얼 번호 대신 "칩 종류(vendor/product)"로 식별하므로,
+# 같은 모델로 장치를 교체해도 이 파일을 고칠 필요가 없습니다.
+#
+#  - 모터  : QinHeng 칩(1a86:55d3)은 시스템에서 유일 → 벤더/제품 ID만으로 식별
+#  - 라이다: EB-IMU와 벤더/제품 ID(10c4:ea60)가 같으므로 product 문자열로 구분 (CP2102N)
+#  - IMU   : 라이다와 구분하기 위해 product 문자열로 구분 (CP2102, 구형)
+#
+# ※ 주의: 라이다/IMU는 "같은 칩(CP2102N / CP2102)을 쓰는 모델"로 교체할 때만
+#         자동으로 잡힙니다. 다른 칩을 쓰는 장치로 바꾸면 아래 product 문자열을
+#         새 장치의 값으로 수정하세요. (확인: udevadm info -a -n /dev/ttyUSBx | grep product)
+
+# 모터 컨트롤러 (QinHeng USB Single Serial) — 벤더/제품 ID로 식별
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", MODE:="0666", SYMLINK+="motor"
+
+# RPLidar S3 (Silicon Labs CP2102N) — product 문자열로 IMU와 구분
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{product}=="CP2102N USB to UART Bridge Controller", MODE:="0666", SYMLINK+="rplidar"
+
+# EB-IMU (Silicon Labs CP2102, 구형) — product 문자열로 라이다와 구분
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{product}=="CP2102 USB to UART Bridge Controller", MODE:="0666", SYMLINK+="ttyimu"
