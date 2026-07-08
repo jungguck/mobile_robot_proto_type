@@ -126,6 +126,22 @@ Cartographer는 odom으로 "대충 이만큼 움직였겠다"를 예측하고, *
 - 장애물 재계획 확인
 - 비상 정지(`/cmd_vel` zeroing) 안전 기능
 
+### 향후 개발 방향 (Phase 5 이후)
+
+Phase 0~5가 "한 대가 지도를 만들고 목표점까지 스스로 간다"까지라면, 그 다음은 **반복 운용이 가능한 서비스 로봇**으로 확장하는 단계입니다.
+
+| 방향 | 내용 | 왜 필요한가 |
+|------|------|-------------|
+| **지도 재사용 (Localization 모드)** | 매번 SLAM으로 새 지도를 만들지 않고, 저장된 `robot_map` + Cartographer pure localization(또는 AMCL)으로 기존 지도에서 위치만 추정 | 운용 단계에서는 지도 생성이 아니라 "아는 공간에서 반복 주행"이 기본. SLAM 상시 구동은 CPU 낭비 + 지도 오염 위험 |
+| **Nav2 스택 병행 평가** | 자작 A*+Tube-MPC와 Nav2(planner/controller server)를 같은 코스에서 비교. 자작 MPC는 Nav2 controller 플러그인으로 이식 가능 | 자작 스택은 학습·튜닝 자유도가 높지만, 복구 행동(recovery)·코스트맵 갱신·라이프사이클 관리는 Nav2가 이미 검증됨 |
+| **동적 장애물 대응** | 현재는 정적 지도 기반 A* 재계획 수준 → local costmap + 속도 장애물(사람) 감속/정지 계층 추가 | 실환경 투입의 최소 안전 요건. Tube-MPC의 tube 제약과 자연스럽게 결합 가능 |
+| **멀티센서 융합 강화** | 뎁스 카메라 추가(라이다 평면 밖 장애물 — 낮은 턱, 테이블 상판), EKF에 시각 오도메트리 보조 | 2D LiDAR 단독의 구조적 사각(높이 정보 없음) 보완 |
+| **매니퓰레이터 연계 (모바일 매니퓰레이션)** | Relay Robot이라는 이름대로, 정지 스테이션의 로봇 팔(예: Trossen arm 셀)과 도킹 → 부품/트레이 릴레이 운반 | 이동(이 프로젝트) + 조작(multi_robot_api)을 잇는 최종 목표 시나리오 |
+| **운용 안정화** | 단일 launch + systemd 자동 기동, 배터리/통신 감시, `/cmd_vel` watchdog(통신 두절 시 자동 정지) | 데모가 아니라 "켜두면 도는" 로봇의 조건 |
+
+> **진행 원칙은 로드맵과 동일**: 한 번에 하나씩, 하위 계층 검증 없이 상위 계층으로 넘어가지 않습니다.
+> 예: 지도 재사용(localization)이 안정되기 전에 동적 장애물 대응을 얹지 않기.
+
 ---
 
 ## 파일 구조
@@ -140,8 +156,17 @@ src/
 │   │   ├── real_robot_260519.launch.py  # 전체 하드웨어 런치
 │   │   └── cartographer.launch.py       # SLAM 런치
 │   ├── scripts/
-│   │   └── setup_udev_rules.sh          # USB 포트 고정 스크립트
+│   │   ├── 99-robot-devices.rules       # udev 규칙 (USB 포트 고정)
+│   │   └── setup_udev_rules.sh          # udev 규칙 설치 스크립트
+│   ├── relayrobot_description/
+│   │   └── real_robot_driver_260519.py  # 모터 드라이버 + 휠 오도메트리 노드
 │   └── urdf/relayrobot.xacro            # 로봇 3D 모델
+│
+├── relayrobot_driver/
+│   └── relayrobot_driver/
+│       ├── motor_id_check.py            # DDSM 모터 ID 조회/변경 도구
+│       ├── motor_test_1.py              # 모터 단독 통신 테스트
+│       └── motor_drive_1.py             # 시리얼 지연(10ms) 최적화 드라이버 모듈
 │
 ├── ebimu_pkg/
 │   └── ebimu_pkg/ebimu_publisher.py     # IMU 드라이버 노드
@@ -489,7 +514,7 @@ cd ~/mobile_robot_proto_type
 colcon build --packages-select ebimu_pkg relayrobot_description
 source install/setup.bash
 
-# 전체 하드웨어 launch (Motor + IMU + EKF)
+# 전체 하드웨어 launch (Motor + IMU + LiDAR + EKF + robot_state_publisher)
 ros2 launch relayrobot_description real_robot_260519.launch.py
 ```
 
@@ -524,7 +549,7 @@ ros2 topic echo /odom --field pose.pose.position --once
 ```
 
 **기대값:** `x ≈ 0.9~1.1`  
-`x`가 크게 다르면 `real_robot_driver_260519.py:82`의 `/600.0` 팩터 조정 필요:
+`x`가 크게 다르면 `real_robot_driver_260519.py:80-81`의 `/600.0` 팩터 조정 필요:
 ```
 실측값이 0.5m → 팩터를 /300.0 으로 변경
 실측값이 1.5m → 팩터를 /900.0 으로 변경
@@ -547,7 +572,7 @@ ros2 topic echo /odom --field pose.pose.orientation --once
 #   기대값: 1.4~1.7 rad (80°~97°)
 ```
 
-`yaw`가 크게 다르면 `real_robot_driver_260519.py:30`의 `wheel_base` 수정:
+`yaw`가 크게 다르면 `real_robot_driver_260519.py:39`의 `wheel_base` 수정:
 ```python
 # 현재 0.165 → 줄자로 바퀴 접지면 간격 실측 후 교체
 self.wheel_base = 0.165
