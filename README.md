@@ -197,6 +197,12 @@ src/
 | RPLidar S3 | `/dev/rplidar` → ttyUSB1 | UART, 1000000 bps |
 
 > 위 매핑은 udev 규칙으로 자동 고정됩니다. 설정 방법은 아래 "USB 포트 고정" 섹션을 참고하세요.
+>
+> ⚠️ **처음 라이다·IMU·모터를 꽂았다면, 링크 이름만 믿지 마세요.** 예전 규칙이 남아 있으면
+> `/dev/motor` 링크가 실제로는 **IMU 포트를 가리키는** 사고가 실제로 있었습니다(2026-07-09).
+> 이 경우 모터 드라이버가 IMU 텍스트를 JSON으로 파싱하려다 계속 실패 → rpm 피드백이 늘 0,
+> "토크 없음/EIO"처럼 보입니다. 처음 연결 시에는 아래 **Step 1의 raw-read 검증**으로
+> 각 포트의 정체를 실제로 확인한 뒤 규칙을 적용하세요.
 
 ---
 
@@ -302,6 +308,30 @@ ros_setup
 
 Linux는 USB 장치를 꽂는 순서대로 `/dev/ttyUSB0`, `/dev/ttyUSB1` 번호를 붙이기 때문에, 재부팅하면 라이다와 IMU의 포트 번호가 뒤바뀔 수 있습니다. udev 규칙을 설정하면 **재부팅·재연결 후에도 장치 이름이 항상 고정**됩니다.
 
+#### Step 0: 연결 확인 (`check_devices.sh`) — 꽂자마자 제일 먼저
+
+**3개(라이다·IMU·모터)를 모두 꽂은 직후, 다른 작업 전에 이 스크립트 하나로 연결 상태를 먼저 확인하세요.**
+udev 심볼릭 링크(`/dev/rplidar`·`/dev/ttyimu`·`/dev/motor`)를 확인하고, 링크가 없으면 실제 USB 칩(vendor/product)으로 각 장치를 찾아 어느 포트에 붙었는지까지 알려줍니다.
+
+```bash
+~/mobile_robot_proto_type/check_devices.sh
+```
+
+정상(규칙 적용 완료) 출력:
+```
+✅ 라이다      : 연결됨  (/dev/rplidar → /dev/ttyUSB1)
+✅ IMU         : 연결됨  (/dev/ttyimu → /dev/ttyUSB0)
+✅ 모터드라이버: 연결됨  (/dev/motor → /dev/ttyACM0)
+결과: 3개 기기 모두 연결 확인됨 ✅
+```
+
+- `✅` = 심볼릭 링크까지 정상 → 바로 실행 가능.
+- `⚠️` = 장치는 꽂혀 있으나 **링크가 없음** → 아직 udev 규칙 미적용. Step 2로 규칙을 적용하세요.
+- `❌` = 장치 자체가 안 잡힘 → USB 재연결/전원/케이블 확인.
+
+> 스크립트는 정본 규칙(`99-robot-devices.rules`)과 **같은 칩 매핑**(모터 `1a86:55d3` / 라이다·IMU `10c4:ea60` + product 문자열)을 씁니다.
+> 규칙 적용 후(Step 2) 다시 한 번 돌려서 세 줄 모두 `✅` 인지 확인하는 것이 마지막 관문입니다.
+
 #### Step 1: 장치 식별
 
 라이다, IMU, 모터 컨트롤러를 모두 연결한 뒤 아래 명령으로 어떤 포트에 어떤 장치가 연결됐는지 확인합니다.
@@ -336,6 +366,42 @@ done
 >
 > 단, 라이다/IMU를 **다른 칩을 쓰는 장치**로 바꾸면 규칙의 product 문자열을 새 값으로 수정해야 합니다. (`udevadm info -a -n /dev/ttyUSBx | grep product` 로 확인)
 
+#### Step 1-B: 포트 정체 직접 확인 (raw-read) — 처음 연결 시 권장
+
+> **왜 필요한가:** 칩(vendor/product)만으로 식별하면 대부분 맞지만, **IMU와 라이다는 같은 CP210x**라
+> product 문자열이 어긋나거나 예전 규칙이 남아 있으면 링크가 엉뚱한 장치를 가리킬 수 있습니다.
+> 실제로 2026-07-09에 `/dev/motor` 가 IMU 포트를 가리켜 모터가 "토크 없음"처럼 보인 사고가 있었습니다.
+> **처음 하드웨어를 꽂았을 때 한 번**, 각 포트에서 raw 바이트를 읽어 정체를 눈으로 확인하세요.
+
+```bash
+python3 - <<'PY'
+import serial
+for p in ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0']:
+    try:
+        s = serial.Serial(p, 115200, timeout=1.0)
+        data = s.read(120); s.close()
+        print(f"{p}: {data[:80]!r}")
+    except Exception as e:
+        print(f"{p}: (열기 실패) {e}")
+PY
+```
+
+**포트별 시그니처 (이걸로 정체 확정):**
+
+| 장치 | raw 읽기 결과 | 근거 |
+|------|---------------|------|
+| **IMU** (CP210x) | `*ROLL,PITCH,YAW,...` 형태의 **텍스트를 계속** 흘림 | EBIMU가 상시 스트리밍 |
+| **모터** (USB Single Serial, ttyACM0) | 평소 **무응답** (DDSM 명령을 보내야 hex 프레임 `\x01\xa0...` 로 응답) | 명령 없으면 침묵 |
+| **라이다** (CP210x) | **바이너리** (비-ASCII 바이트 덩어리, 실제 통신은 1000000 bps) | 스캔 프레임 |
+
+> 모터가 진짜 응답하는지까지 확인하려면, 저장소 루트의 `ddsm_raw_monitor.py` 로 속도 명령을 보내며
+> raw 응답(`spd`/`cur` 변화)을 봅니다: `python3 ddsm_raw_monitor.py`.
+> (launch가 `/dev/motor` 를 점유 중이면 먼저 `Ctrl-C` 로 끄고 실행)
+
+> **권한도 함께 확인:** udev 규칙에 `MODE="0666"` 이 있어야 하고, 사용자가 `dialout` 그룹에 속해야
+> 포트를 열 수 있습니다. `groups | grep dialout` 로 확인, 없으면
+> `sudo usermod -aG dialout $USER` 후 재로그인.
+
 #### Step 2: 규칙 적용
 
 아래 명령을 그대로 실행하세요. (setup_udev_rules.sh 대신 이 방법을 권장합니다)
@@ -346,7 +412,12 @@ sudo cp ~/mobile_robot_proto_type/src/relayrobot_description/scripts/99-robot-de
   && sudo udevadm trigger
 ```
 
-USB를 모두 뽑았다가 다시 꽂은 후 확인:
+USB를 모두 뽑았다가 다시 꽂은 후, **Step 0의 `check_devices.sh` 를 다시 실행해 세 줄 모두 `✅` 인지 확인**하세요:
+```bash
+~/mobile_robot_proto_type/check_devices.sh
+```
+
+링크 대상을 직접 보고 싶으면:
 ```bash
 ls -la /dev/rplidar /dev/ttyimu /dev/motor
 ```
