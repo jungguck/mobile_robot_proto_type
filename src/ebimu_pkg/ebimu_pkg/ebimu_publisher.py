@@ -35,7 +35,10 @@ class EbimuPublisher(Node):
     발행 토픽:
       /ebimu_data (sensor_msgs/Imu) → EKF가 구독해서 odom_raw와 융합
 
-    시리얼 포맷: *ROLL,PITCH,YAW,ACCX,ACCY,ACCZ,GYROX,GYROY,GYROZ
+    시리얼 포맷 (센서 설정에 따라 둘 중 하나):
+      *ROLL,PITCH,YAW,ACCX,ACCY,ACCZ,GYROX,GYROY,GYROZ   (9개)
+      *ROLL,PITCH,YAW                                     (3개)
+    2026-08-22 현재 이 센서는 3개만 출력한다.
     """
 
     def __init__(self):
@@ -64,6 +67,9 @@ class EbimuPublisher(Node):
         self.bias_accy  = 0.0
         self.bias_gyroz = 0.0
 
+        # 센서가 9개 필드(가속도/자이로 포함)를 주는지 여부. _calibrate 에서 확정.
+        self.has_full_imu = True
+
         self.get_logger().info(f'Calibrating for {CALIB_SECONDS}s — IMU를 평평하게 고정하세요...')
         self._calibrate()
         self.get_logger().info(
@@ -73,12 +79,21 @@ class EbimuPublisher(Node):
         self.timer = self.create_timer(0.02, self.timer_callback)  # 50Hz
 
     def _read_line(self):
-        """시리얼 1줄 읽어서 9개 float 리스트 반환. 파싱 실패 시 None."""
+        """시리얼 1줄 읽어서 float 리스트 반환. 파싱 실패 시 None.
+
+        EBIMU 출력 포맷은 센서 설정에 따라 두 가지다.
+          9개: *ROLL,PITCH,YAW,ACCX,ACCY,ACCZ,GYROX,GYROY,GYROZ
+          3개: *ROLL,PITCH,YAW                (자세만 출력하도록 설정된 경우)
+
+        2026-08-22 현재 이 센서는 3개만 내보낸다. 예전 코드는 9개가 아니면
+        전부 버려서 /ebimu_data 가 한 번도 발행되지 않았다.
+        3개짜리도 받아들이고, 없는 값(가속도/자이로)은 EKF 설정에서 끈다.
+        """
         raw = self.ser.readline().decode('utf-8', errors='ignore').replace('\r', '').replace('\n', '').strip()
         if not raw.startswith('*'):
             return None
         words = raw.replace('*', '').split(',')
-        if len(words) != 9:
+        if len(words) not in (3, 9):
             return None
         try:
             return [float(v) for v in words]
@@ -86,13 +101,24 @@ class EbimuPublisher(Node):
             return None
 
     def _calibrate(self):
-        """CALIB_SECONDS 동안 정지 상태 샘플 수집 → ACC/GYRO 바이어스 계산."""
+        """CALIB_SECONDS 동안 정지 상태 샘플 수집 → ACC/GYRO 바이어스 계산.
+
+        센서가 자세(3개)만 내보내는 설정이면 보정할 가속도/자이로가 없으므로
+        바이어스는 0으로 두고 즉시 끝낸다. (10초를 헛되이 기다리지 않는다)
+        """
         samples = []
         start = time.time()
         while time.time() - start < CALIB_SECONDS:
             d = self._read_line()
             if d:
                 samples.append(d)
+                if len(d) == 3:
+                    # 자세만 나오는 센서 — 보정할 항목이 없다
+                    self.has_full_imu = False
+                    self.get_logger().info(
+                        'IMU가 자세(roll/pitch/yaw)만 출력 — 가속도/자이로 보정 생략'
+                    )
+                    return
 
         if not samples:
             self.get_logger().warn('Calibration failed: no samples received')
@@ -130,30 +156,38 @@ class EbimuPublisher(Node):
                 0.0,    0.0,    0.0025,
             ]
 
-            # 바이어스 제거 후 G → m/s² 변환
-            msg.linear_acceleration.x = (d[3] - self.bias_accx) * 9.80665
-            msg.linear_acceleration.y = (d[4] - self.bias_accy) * 9.80665
-            msg.linear_acceleration.z = d[5] * 9.80665  # z축은 중력 포함 그대로
-            msg.linear_acceleration_covariance = [
-                0.04, 0.0,  0.0,
-                0.0,  0.04, 0.0,
-                0.0,  0.0,  0.04,
-            ]
+            if len(d) == 9:
+                # 바이어스 제거 후 G → m/s² 변환
+                msg.linear_acceleration.x = (d[3] - self.bias_accx) * 9.80665
+                msg.linear_acceleration.y = (d[4] - self.bias_accy) * 9.80665
+                msg.linear_acceleration.z = d[5] * 9.80665  # z축은 중력 포함 그대로
+                msg.linear_acceleration_covariance = [
+                    0.04, 0.0,  0.0,
+                    0.0,  0.04, 0.0,
+                    0.0,  0.0,  0.04,
+                ]
 
-            # 바이어스 제거 후 deg/s → rad/s 변환
-            msg.angular_velocity.x = math.radians(d[6])
-            msg.angular_velocity.y = math.radians(d[7])
-            msg.angular_velocity.z = math.radians(d[8] - self.bias_gyroz)
-            msg.angular_velocity_covariance = [
-                0.001, 0.0,   0.0,
-                0.0,   0.001, 0.0,
-                0.0,   0.0,   0.001,
-            ]
+                # 바이어스 제거 후 deg/s → rad/s 변환
+                msg.angular_velocity.x = math.radians(d[6])
+                msg.angular_velocity.y = math.radians(d[7])
+                msg.angular_velocity.z = math.radians(d[8] - self.bias_gyroz)
+                msg.angular_velocity_covariance = [
+                    0.001, 0.0,   0.0,
+                    0.0,   0.001, 0.0,
+                    0.0,   0.0,   0.001,
+                ]
+            else:
+                # 자세만 나오는 센서. 가속도/자이로는 "없음" 으로 표시한다.
+                # ROS 규약: covariance[0] = -1 이면 해당 항목 미제공.
+                # EKF 설정(imu0_config)에서도 이 항목들을 꺼둬야 한다.
+                msg.linear_acceleration_covariance[0] = -1.0
+                msg.angular_velocity_covariance[0] = -1.0
 
             self.publisher.publish(msg)
 
-        except Exception:
-            pass
+        except Exception as e:
+            # 예전에는 조용히 삼켜서 "왜 토픽이 안 나오지" 를 진단할 수 없었다.
+            self.get_logger().warn(f'IMU parse/publish failed: {e}', once=True)
 
 
 def main(args=None):

@@ -87,9 +87,9 @@ class RealRobotDriver260519(Node):
         if not self.driver:
             return
 
+        # read_feedback() 이 하드웨어 장착 부호(DIR_L/DIR_R)를 이미 흡수해서
+        # "+ = 로봇 전진" 으로 돌려준다. 여기서 다시 뒤집으면 안 된다.
         rpm_L, rpm_R = self.driver.read_feedback()
-        # 왼쪽 모터는 drive()에서 부호 반전해서 전송하므로 피드백도 반전
-        rpm_L = -rpm_L
 
         # rpm_scale=600 = /10(DDSM 스케일: cmd100=10RPM) × /60(RPM→RPS)
         # 주의: drive()의 calculate_rpms()는 ×60(순수 RPM) 기준이라 여기와 10배 어긋남.

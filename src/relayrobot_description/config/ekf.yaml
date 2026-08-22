@@ -10,23 +10,41 @@ ekf_filter_node:
     base_link_frame: base_link  # 로봇 본체 좌표계
     world_frame: odom           # 현재는 odom 기준
 
-    # 1. 바퀴 오도메트리 설정 (/odom_raw)
+    # ------------------------------------------------------------------
+    # 융합 전략 (2026-08-22 변경)
+    #
+    #   방향(yaw) : IMU 절대 yaw 만 사용
+    #   위치(x,y) : 바퀴 속도(vx)를 IMU yaw 방향으로 적분
+    #
+    # 왜 바퀴의 절대 x,y 를 안 쓰나:
+    #   /odom_raw 의 x,y 는 "바퀴가 자기 yaw 로 적분한" 위치다.
+    #   바퀴 yaw 와 IMU yaw 가 어긋나면 두 값이 서로 밀고 당겨서
+    #   직진 중에도 궤적이 좌우로 흔들린다.
+    #   속도만 넘기고 방향은 IMU 에 맡기면 이 충돌이 사라진다.
+    #
+    # 왜 v_yaw(각속도)를 양쪽 다 껐나:
+    #   이 IMU 는 현재 자세(roll/pitch/yaw)만 출력하고 자이로 값을 안 준다.
+    #   바퀴 v_yaw 는 좌우 rpm 차이로 계산한 값이라 IMU yaw 와 경쟁하게 되므로
+    #   방향 소스를 IMU 하나로 통일한다.
+    # ------------------------------------------------------------------
+
+    # 1. 바퀴 오도메트리 (/odom_raw) — 속도만 사용
     odom0: /odom_raw
-    odom0_config: [true,  true,  false, # x, y 위치 사용
+    odom0_config: [false, false, false, # x, y 위치 미사용 (IMU yaw 와 충돌)
                    false, false, false, # roll, pitch, yaw (IMU에 양보)
-                   true,  true,  false, # vx, vy 속도 사용
-                   false, false, true,  # v_yaw(각속도) 사용
+                   true,  true,  false, # vx 사용, vy=0 은 비홀로노믹 구속으로 유효
+                   false, false, false, # v_yaw 미사용 (방향은 IMU 담당)
                    false, false, false]
     odom0_relative: false
 
-    # 2. EBIMU 설정 (/imu)
+    # 2. EBIMU (/ebimu_data) — 절대 yaw 만 사용
     imu0: /ebimu_data
     imu0_config: [false, false, false, # x, y, z 위치 (IMU는 위치 못 잡음)
                   false, false, true,  # Roll, Pitch 무시하고 'Yaw'만 사용
                   false, false, false, # 속도 사용 안 함
-                  false, false, true,  # v_yaw (각속도) 사용
-                  false, false, false] # 선가속도 (보통 노이즈가 심해 끔)
-    
+                  false, false, false, # v_yaw 미사용 (센서가 자이로를 안 줌)
+                  false, false, false] # 선가속도 (노이즈 심해 끔)
+
     # IMU 설정 핵심 파라미터
     imu0_differential: false # 절대 각도를 쓸 거면 false
     imu0_relative: true      # 시작 시점의 각도를 0으로 잡으려면 true
