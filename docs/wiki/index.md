@@ -15,5 +15,10 @@
 - [[Debugging_Experience]]: 발생했던 문제와 해결 과정의 집대성.
 - [[log]]: 전체 활동 타임라인.
 
+### 세션별 상세 디버그 로그
+- `docs/DEBUG_LOG_2026-07-09.md`: 하드웨어 브링업 재검증, EKF NaN 원인, 원격 분기 정리.
+- `docs/DEBUG_LOG_2026-08-22.md`: DDSM400 통신 규약 확정(type/단위/부호/ID), IMU 무발행,
+  오도메트리 직진 측정, EKF 융합 전략 변경.
+
 ---
-*Last updated: 2026-05-20*
+*Last updated: 2026-08-22*
