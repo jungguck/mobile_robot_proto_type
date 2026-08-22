@@ -5,11 +5,12 @@
   <description>ROS2 GUI package for teleoperation, SLAM control, and sensor management.</description>
   <maintainer email="todo@todo.com">relayrobot</maintainer>
   <license>Apache-2.0</license>
-  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
+  <exec_depend>python3-tk</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

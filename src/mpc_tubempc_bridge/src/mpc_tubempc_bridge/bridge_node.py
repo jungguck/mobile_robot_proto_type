@@ -1,5 +1,5 @@
 import sys
-from pathlib import Path
+from pathlib import Path as FsPath
 import math
 
 import numpy as np
@@ -10,7 +10,7 @@ from rclpy.node import Node
 
 # TubeMPCPlanner는 ddsm_example/mpc_tubempc/ 에 있음
 # 별도 패키지가 아니라 sys.path로 직접 가져옴 → colcon build --symlink-install 필수
-this_dir = Path(__file__).resolve().parent
+this_dir = FsPath(__file__).resolve().parent
 mpc_dir  = this_dir.parents[2] / 'ddsm_example' / 'mpc_tubempc'
 if str(mpc_dir) not in sys.path:
     sys.path.insert(0, str(mpc_dir))

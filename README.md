@@ -3,7 +3,27 @@
 DDSM400 모터 + EBIMU9DOFV5 IMU + RPLidar S3 기반 차동 구동 모바일 로봇.  
 Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어기로 자율 주행.
 
-> **지원 ROS 버전:** ROS 2 Jazzy (Ubuntu 24.04) / ROS 2 Humble (Ubuntu 22.04)
+> **지원 ROS 버전:** ROS 2 Jazzy (Ubuntu 24.04) / Humble (Ubuntu 22.04) / Foxy (Ubuntu 20.04)
+
+### 우분투·ROS 배포판 호환표
+
+| 항목 | Foxy (20.04) | Humble (22.04) | Jazzy (24.04) |
+|------|--------------|----------------|---------------|
+| `colcon build` (6개 패키지 전부) | ✅ 빌드 확인됨 | ✅ | ✅ |
+| 실기 파이프라인 (모터·IMU·LiDAR·EKF·Cartographer·MPC) | ✅ | ✅ | ✅ |
+| `gazebo.launch.py` 시뮬레이션 | ✅ | ✅ | ❌ **불가** |
+| 시스템 Python | 3.8 | 3.10 | 3.12 |
+
+**Jazzy에서 Gazebo 시뮬레이션이 안 되는 이유:** `urdf/relayrobot.xacro`·`relayrobot.gazebo`가
+Gazebo Classic 플러그인(`libgazebo_ros_diff_drive.so`, `libgazebo_ros_ray_sensor.so`,
+`libgazebo_ros_joint_state_publisher.so`)을 쓰는데, Gazebo Classic은 2025년 1월 EOL이라
+`ros-jazzy-gazebo-ros` 패키지가 없습니다. Jazzy에서 시뮬레이션을 돌리려면 `ros_gz_sim` +
+`gz_ros2_control` 기반으로 URDF를 다시 써야 합니다. **실기 주행은 Jazzy에서도 정상 동작**합니다
+(시뮬레이션 런치만 못 씀).
+
+**코드 자체는 배포판 중립입니다.** rclpy/launch API를 배포판별로 갈리는 방식으로 쓰지 않고,
+`np.float`·`np.int` 같은 NumPy 2.0에서 제거된 별칭도 없어서 20.04~24.04 어디서든 그대로 빌드됩니다.
+바뀌는 건 아래 apt 명령의 배포판 이름뿐입니다.
 
 ---
 
@@ -250,7 +270,8 @@ sudo apt update && sudo apt install -y \
   ros-jazzy-robot-localization \
   ros-jazzy-cartographer-ros \
   ros-jazzy-tf-transformations \
-  ros-jazzy-teleop-twist-keyboard
+  ros-jazzy-teleop-twist-keyboard \
+  ros-jazzy-nav2-map-server
 ```
 
 **Humble (Ubuntu 22.04):**
@@ -259,7 +280,18 @@ sudo apt update && sudo apt install -y \
   ros-humble-robot-localization \
   ros-humble-cartographer-ros \
   ros-humble-tf-transformations \
-  ros-humble-teleop-twist-keyboard
+  ros-humble-teleop-twist-keyboard \
+  ros-humble-nav2-map-server
+```
+
+**Foxy (Ubuntu 20.04):**
+```bash
+sudo apt update && sudo apt install -y \
+  ros-foxy-robot-localization \
+  ros-foxy-cartographer-ros \
+  ros-foxy-tf-transformations \
+  ros-foxy-teleop-twist-keyboard \
+  ros-foxy-nav2-map-server
 ```
 
 Python 의존 패키지:
@@ -273,8 +305,12 @@ conda deactivate   # conda 밖(시스템 3.12)으로
 
 # Ubuntu 24.04는 시스템 pip이 보호돼 있어 --break-system-packages 필요
 pip3 install --break-system-packages --user \
-  numpy scipy cvxpy polytope osqp cvxopt transforms3d
+  numpy scipy cvxpy polytope osqp cvxopt transforms3d pyserial
 ```
+
+> Ubuntu 22.04/20.04는 시스템 pip이 보호돼 있지 않으므로 `--break-system-packages` 없이 설치하세요.
+> `numpy`·`scipy`·`pyserial`은 `rosdep install --from-paths src --ignore-src -r -y` 로도 설치됩니다
+> (각 `package.xml`에 선언돼 있음). apt/rosdep으로 안 잡히는 건 `cvxpy`·`polytope`·`osqp`·`cvxopt` 뿐입니다.
 
 ---
 
