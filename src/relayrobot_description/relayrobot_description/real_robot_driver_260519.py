@@ -25,8 +25,23 @@ class RealRobotDriver260519(Node):
     def __init__(self):
         super().__init__('real_robot_driver_260519')
 
+        # 실측: 바퀴 지름 65mm(r=0.0325), 양 바퀴 중심간 거리 220mm
+        # 캘리브레이션 중에는 재빌드 없이 --ros-args -p 로 바로 바꿀 수 있도록 파라미터화
+        self.declare_parameter('port', '/dev/motor')
+        self.declare_parameter('wheel_radius', 0.0325)
+        self.declare_parameter('wheel_base', 0.22)
+        self.declare_parameter('rpm_scale', 600.0)
+
+        port              = self.get_parameter('port').value
+        self.wheel_radius = self.get_parameter('wheel_radius').value
+        self.wheel_base   = self.get_parameter('wheel_base').value
+        self.rpm_scale    = self.get_parameter('rpm_scale').value
+
         try:
-            self.driver = MotorDriver(port='/dev/motor')
+            # 명령/오도메트리가 같은 기구학 상수를 쓰도록 드라이버에 그대로 주입
+            self.driver = MotorDriver(port=port,
+                                      wheel_radius=self.wheel_radius,
+                                      wheel_base=self.wheel_base)
             if self.driver.ser is None:
                 raise Exception("Serial connection returned None")
             self.get_logger().info("DDSM400 Motor Connected Successfully!")
@@ -34,9 +49,10 @@ class RealRobotDriver260519(Node):
             self.get_logger().error(f"Motor connection failed: {e}")
             self.driver = None
 
-        # 실측 후 조정 필요: 직진 1m 테스트로 검증 (README STAGE 4 참고)
-        self.wheel_radius = 0.05   # 단위: m
-        self.wheel_base   = 0.165  # 두 바퀴 접지면 간격, 단위: m
+        self.get_logger().info(
+            f"kinematics: r={self.wheel_radius} m, base={self.wheel_base} m, "
+            f"rpm_scale={self.rpm_scale}"
+        )
 
         # 적분으로 누적되는 위치 (노드 시작 시 0으로 초기화)
         self.x     = 0.0
@@ -75,10 +91,12 @@ class RealRobotDriver260519(Node):
         # 왼쪽 모터는 drive()에서 부호 반전해서 전송하므로 피드백도 반전
         rpm_L = -rpm_L
 
-        # /600 = /10(DDSM 스케일: cmd100=10RPM) × /60(RPM→RPS)
+        # rpm_scale=600 = /10(DDSM 스케일: cmd100=10RPM) × /60(RPM→RPS)
+        # 주의: drive()의 calculate_rpms()는 ×60(순수 RPM) 기준이라 여기와 10배 어긋남.
+        #       STAGE 1(무부하 회전수 측정)로 실제 단위를 확정한 뒤 이 값을 맞출 것.
         # 결과: 바퀴 선속도(m/s)
-        vl = (rpm_L / 600.0) * (2 * math.pi * self.wheel_radius)
-        vr = (rpm_R / 600.0) * (2 * math.pi * self.wheel_radius)
+        vl = (rpm_L / self.rpm_scale) * (2 * math.pi * self.wheel_radius)
+        vr = (rpm_R / self.rpm_scale) * (2 * math.pi * self.wheel_radius)
 
         # 차동 구동 기구학: 로봇 중심 선속도 / 각속도
         v     = (vl + vr) / 2.0

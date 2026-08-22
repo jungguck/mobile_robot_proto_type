@@ -4,11 +4,14 @@ import time
 import math
 
 class MotorDriver:
-    def __init__(self, port='/dev/motor', baudrate=115200):
+    def __init__(self, port='/dev/motor', baudrate=115200,
+                 wheel_radius=0.0325, wheel_base=0.22):
         self.MOTOR_ID_L = 2
         self.MOTOR_ID_R = 1
-        self.wheel_radius = 0.035  
-        self.wheel_base = 0.2     
+        # 실측: 바퀴 지름 65mm, 양 바퀴 중심간 거리 220mm
+        # 오도메트리 노드와 반드시 같은 값을 써야 하므로 노드에서 주입받음
+        self.wheel_radius = wheel_radius
+        self.wheel_base = wheel_base
         
         # 피드백 저장을 위한 변수
         self.current_rpm_L = 0
