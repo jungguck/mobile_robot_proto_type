@@ -655,12 +655,12 @@ ros2 topic pub /cmd_vel geometry_msgs/Twist \
 ros2 topic echo /odom --field pose.pose.position --once
 ```
 
-**기대값:** `x ≈ 0.9~1.1`  
-`x`가 크게 다르면 `real_robot_driver_260519.py:80-81`의 `/600.0` 팩터 조정 필요:
-```
-실측값이 0.5m → 팩터를 /300.0 으로 변경
-실측값이 1.5m → 팩터를 /900.0 으로 변경
-```
+**기대값:** `x ≈ 0.9~1.1`
+
+> ✅ **`rpm_scale`(`/600.0`)은 2026-09-03 기준 확정값입니다. 임의로 바꾸지 마세요.**
+> 명령 쪽(`calculate_rpms()` ×600)과 계측 쪽(`/600.0`)이 이미 일치합니다.
+> 값이 크게 어긋난다면 팩터가 아니라 **유령 거리 버그**(`timer_callback()` 명령 재전송 미적용)를
+> 먼저 의심하세요. 자세한 내용은 `docs/DEBUG_LOG_2026-09-03.md` 3절.
 
 ---
 
@@ -679,11 +679,12 @@ ros2 topic echo /odom --field pose.pose.orientation --once
 #   기대값: 1.4~1.7 rad (80°~97°)
 ```
 
-`yaw`가 크게 다르면 `real_robot_driver_260519.py:39`의 `wheel_base` 수정:
-```python
-# 현재 0.165 → 줄자로 바퀴 접지면 간격 실측 후 교체
-self.wheel_base = 0.165
-```
+> ✅ **`wheel_base = 0.22` 는 2026-09-03 기준 확정 실측값입니다.**
+> (예전 문서의 `0.165` 는 URDF CAD 기준값으로, 실측과 다릅니다. 코드값 0.22 가 맞습니다.)
+> 재빌드 없이 값을 바꿔 시험만 해보려면:
+> ```bash
+> ros2 run relayrobot_description real_robot_driver_260519 >   --ros-args -p wheel_base:=0.22 -p wheel_radius:=0.0325
+> ```
 
 ---
 
