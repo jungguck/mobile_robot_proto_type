@@ -91,9 +91,17 @@ class RealRobotDriver260519(Node):
         # "+ = 로봇 전진" 으로 돌려준다. 여기서 다시 뒤집으면 안 된다.
         rpm_L, rpm_R = self.driver.read_feedback()
 
-        # rpm_scale=600 = /10(DDSM 스케일: cmd100=10RPM) × /60(RPM→RPS)
-        # 주의: drive()의 calculate_rpms()는 ×60(순수 RPM) 기준이라 여기와 10배 어긋남.
-        #       STAGE 1(무부하 회전수 측정)로 실제 단위를 확정한 뒤 이 값을 맞출 것.
+        # spd 는 RPM 이 아니라 0.1RPM 단위다. 즉 10 RPM = spd 100.
+        #
+        #   spd ──÷10──▶ RPM ──÷60──▶ rev/s ──×2πr──▶ m/s
+        #       └──────── rpm_scale = 10 × 60 = 600 ────────┘
+        #
+        # 명령 쪽 calculate_rpms() 의 ×600 과 정확히 서로의 역연산이므로 어긋나지 않는다.
+        #   0.1 m/s ÷ 2πr(0.2042) = 0.4897 rev/s ×600 → cmd 293
+        #   spd 293 ÷ 600 = 0.4883 rev/s ×0.2042    → 0.0997 m/s  (왕복 일치)
+        #
+        # 2026-09-03 확정값. 이 값을 조정하지 말 것. (docs/DEBUG_LOG_2026-09-03.md 2절)
+        # odom 거리가 안 맞으면 이 팩터가 아니라 유령 거리(피드백 stale)를 먼저 의심할 것.
         # 결과: 바퀴 선속도(m/s)
         vl = (rpm_L / self.rpm_scale) * (2 * math.pi * self.wheel_radius)
         vr = (rpm_R / self.rpm_scale) * (2 * math.pi * self.wheel_radius)

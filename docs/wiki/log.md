@@ -61,7 +61,6 @@
     - `timer_callback()` 명령 재전송 + `cmd_vel` 타임아웃 → 유령 거리 (**우선순위 1**)
     - `odom.header.stamp` 이중 취득 (`current_time` 재사용하면 됨)
     - `ebimu_publisher.py` `frame_id` 기본값이 URDF 에 없는 `imu_link` (launch 는 덮어쓰므로 잠복)
-    - 드라이버 `rpm_scale` 주석의 "×60 기준이라 10배 어긋남" 문구가 사실과 다름
     - IMU + 바퀴 융합 직진 테스트 미실시 / URDF 실측 불일치 / 라이다 미연결 (8/22 이월)
 - **환경**: JetPack 6.2.1 부팅 불가 → **JetPack 5.1.3 을 bridge 로** QSPI 펌웨어 갱신 (재부팅 2회)
 - **원격**: VS Code Remote-SSH(작업) / `ssh -X` + `hw_test`(점검) / Foxglove(SLAM 모니터링)

@@ -57,7 +57,11 @@ class MotorDriver:
 
         반환 단위는 RPM 이 아니라 DDSM400 의 cmd 단위(0.1RPM)다.
         즉 cmd 100 = 10 RPM. (2026-08-22 실측: cmd 100 -> spd 105 회신)
-        그래서 60 이 아니라 600 을 곱한다.
+        그래서 60(RPM→RPS) 이 아니라 ×10(0.1RPM 단위)까지 합쳐 600 을 곱한다.
+
+        이 ×600 은 real_robot_driver_260519.py 의 rpm_scale(÷600) 과
+        정확히 서로의 역연산이다. 한쪽만 바꾸면 명령과 계측이 어긋난다.
+        (2026-09-03 확정값 — 조정하지 말 것)
         """
         v_left = v - (w * self.wheel_base / 2)
         v_right = v + (w * self.wheel_base / 2)
