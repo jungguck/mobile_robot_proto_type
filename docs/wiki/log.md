@@ -67,3 +67,17 @@
 - **프로세스 규칙**: **실기에서 값이 확정되면 그날 저장소에 반영한다.** 미루면 다음 세션이
   이미 닫힌 항목을 다시 열어 시간을 쓴다 (오늘 실제로 발생).
 - **상세**: `docs/DEBUG_LOG_2026-09-03.md`
+
+## [2026-09-03] Setup | 젯슨 셋업 가이드 + 목표 환경 확정 (JetPack 6.2.1 / Humble)
+- **내용**: 젯슨 준비 절차와 PC 쪽 원격 개발 환경을 한 문서로 정리. 목표 ROS 배포판 확정.
+- **확정**: **JetPack 6.2.1 = L4T 36.4.x = Ubuntu 22.04 = ROS 2 Humble** (Jazzy 아님)
+    - Humble 은 LTS(2027-05)이고 README 호환표에서 Gazebo 시뮬까지 ✅ → 전 항목 우위
+    - JetPack 5.1.x(Ubuntu 20.04)는 Foxy 이고 2023-05 EOL → 목적지가 아니라 펌웨어 경유지
+- **정정**: `DEBUG_LOG_2026-09-03.md` 4절에 "JetPack 6 → Jazzy → Gazebo 불가" 로 잘못 적었던
+  대목을 바로잡음. JetPack 6 은 24.04 가 아니라 22.04 다.
+- **작업**: `docs/JETSON_SETUP.md` 신규 작성
+    - 젯슨: 시스템/네트워크/dialout/ROS Humble/프로젝트 의존성/클론·빌드/udev/전원모드·스왑/xauth
+    - **ROS apt 서명 키가 2025-06 에 교체됨** → 예전 `apt-key` 방식은 `NO_PUBKEY` 오류.
+      `ros2-apt-source` .deb 방식으로 안내
+    - PC: SSH 키·config, VS Code Remote-SSH, VcXsrv, Foxglove Studio
+    - 원격 코드 편집 4가지 비교 / tmux / 저장소 두 곳 갈라짐 주의
