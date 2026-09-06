@@ -1,8 +1,20 @@
-# 로봇 안전 종료 (PC 쪽) — 젯슨을 끄고, 전원을 뽑아도 되는 시점까지 대기한다.
+﻿# 로봇 안전 종료 (PC 쪽) — 젯슨을 끄고, 전원을 뽑아도 되는 시점까지 대기한다.
 #
-# 사용법:
+# 사용법 — 이건 PC 에서 도는 PowerShell 스크립트다. ssh 뒤에 붙이는 게 아니다.
+#
 #     .\scripts\robot-off.ps1
-#     .\scripts\robot-off.ps1 -RobotHost robot     # ~/.ssh/config 의 Host 이름
+#     .\scripts\robot-off.ps1 -RobotHost robot   # ~/.ssh/config 의 Host 이름
+#
+#     젯슨만 끄고 대기는 직접 하겠다면:  ssh robot robot-off
+#
+# 실행 정책에 막히면 (윈도우 기본값이 Restricted 라 대부분 막힌다):
+#     powershell -ExecutionPolicy Bypass -File .\scripts\robot-off.ps1
+#
+# 매번 치기 싫으면 한 번만 풀어둔다 (사용자 범위 / 관리자 권한 불필요):
+#     Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+#
+# ※ 이 파일은 UTF-8 BOM 으로 저장해야 한다. Windows PowerShell 5.1 은 BOM 이 없으면
+#    ANSI(CP949)로 읽어서 한글 주석이 깨지고 파서가 죽는다. 편집기 설정 주의.
 #
 # 하는 일:
 #     1. 젯슨 IP 를 먼저 알아둔다 (끄고 나면 물어볼 수 없다)
