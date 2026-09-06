@@ -43,7 +43,10 @@ fi
 # 통째로 잡는다. 새 노드를 추가해도 이 스크립트를 고칠 필요가 없다.
 echo "[2/5] ROS 노드 종료"
 
-WS_PATTERN="$WS/install/"
+# 노드 실행파일은 반드시 install/<패키지>/lib/<패키지>/<이름> 에 있다.
+# install/ 만으로 잡으면 명령줄에 그 경로를 언급한 셸(ssh·tmux 등)까지 죽는다.
+# /lib/ 까지 요구해서 실제 노드 프로세스만 걸리게 한다.
+WS_PATTERN="$WS/install/[^ ]*/lib/"
 # 워크스페이스 밖(apt)에서 오는 노드는 여기에만 적어두면 된다.
 EXTERNAL_NODES="robot_state_publisher ekf_node cartographer_node cartographer_occupancy_grid_node joint_state_publisher"
 
