@@ -3,3 +3,6 @@ install/
 log/
 
 __pycache__/
+
+# colcon 이 만드는 egg-info (src 레이아웃 패키지)
+*.egg-info/
