@@ -54,7 +54,8 @@ show_status() {
 
   echo "  발행 중인 토픽:"
   for t in /scan /ebimu_data /odom_raw /odometry/filtered /joint_states; do
-    hz=$(timeout 4 ros2 topic hz "$t" 2>/dev/null | grep -oE "average rate: [0-9.]+" | head -1 | grep -oE "[0-9.]+")
+    # 타임아웃이 짧으면 10Hz 토픽의 첫 샘플을 놓쳐 "안 나온다" 고 오해하게 된다.
+    hz=$(timeout 8 ros2 topic hz "$t" 2>/dev/null | grep -oE "average rate: [0-9.]+" | head -1 | grep -oE "[0-9.]+")
     if [ -n "$hz" ]; then
       printf "      %-22s %6.1f Hz\n" "$t" "$hz"
     fi
