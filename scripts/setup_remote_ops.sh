@@ -80,53 +80,22 @@ fi
 
 # ── 3. robot-off 헬퍼 ─────────────────────────────────────────────────────────
 step "3/4  robot-off 설치 (안전 종료 명령)"
+SRC="$REPO/scripts/robot-off.sh"
+[ -f "$SRC" ] || die "종료 스크립트를 찾을 수 없습니다: $SRC"
+
+# 실행 전에 문법부터 본다. 깨진 스크립트를 설치하면 정작 끌 때 못 끈다.
+bash -n "$SRC" || die "robot-off.sh 문법 오류 — 설치하지 않았습니다"
+
+# 저장소가 윈도우 PC 를 거치면 CRLF 로 체크아웃될 수 있고, 그러면 셰뱅이 깨져서
+# 정작 끌 때 robot-off 가 실행되지 않는다. 조건을 따지지 말고 항상 LF 로 정규화한다
+# (이미 LF 면 tr 이 아무것도 하지 않는다).
 ROBOTOFF_TMP="$(mktemp)"
-cat > "$ROBOTOFF_TMP" <<'ROBOTOFF'
-#!/usr/bin/env bash
-# 로봇 안전 종료 — 원격(SSH)에서 젯슨을 끄는 표준 방법
-#   1) 모터 정지  2) 노드 종료  3) 디스크 flush  4) 전원 차단
-set -uo pipefail
-
-echo "[1/4] 모터 정지 명령 (/cmd_vel = 0)"
-if [ -f /opt/ros/humble/setup.bash ]; then
-  set +u
-  source /opt/ros/humble/setup.bash
-  [ -f "$HOME/mobile_robot_proto_type/install/setup.bash" ] && \
-    source "$HOME/mobile_robot_proto_type/install/setup.bash"
-  set -u
-  if timeout 6 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
-       "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" \
-       --once >/dev/null 2>&1; then
-    echo "      정지 명령 전송됨"
-  else
-    echo "      (노드 미실행으로 보임 — 건너뜀)"
-  fi
-else
-  echo "      (ROS 미설치 — 건너뜀)"
-fi
-
-echo "[2/4] ROS 노드 종료"
-for n in real_robot_driver ebimu_publisher sllidar_node ekf_node cartographer; do
-  if pkill -f "$n" 2>/dev/null; then echo "      종료: $n"; fi
-done
-sleep 2
-
-echo "[3/4] 디스크 캐시 flush (sync)"
-sync; sync
-
-echo "[4/4] 시스템 종료"
-echo
-echo "  ★ 전원 어댑터를 지금 뽑지 마세요."
-echo "    LED 가 꺼지고 팬이 완전히 멈춘 뒤에 뽑아야 합니다."
-echo "    PC 에서는 ping 이 끊기고 20초 더 기다리면 안전합니다."
-echo
-sudo -n /usr/sbin/poweroff
-ROBOTOFF
-
+tr -d '\r' < "$SRC" > "$ROBOTOFF_TMP"
 sudo install -m 0755 -o root -g root "$ROBOTOFF_TMP" /usr/local/bin/robot-off
 rm -f "$ROBOTOFF_TMP"
-bash -n /usr/local/bin/robot-off || die "robot-off 문법 오류"
-ok "설치 완료 → /usr/local/bin/robot-off (문법 검사 통과)"
+
+bash -n /usr/local/bin/robot-off || die "설치된 robot-off 문법 오류"
+ok "설치 완료 → /usr/local/bin/robot-off (원본: scripts/robot-off.sh)"
 
 # ── 4. 파일시스템 점검 ────────────────────────────────────────────────────────
 step "4/4  SD 카드 파일시스템 점검"
@@ -162,12 +131,11 @@ cat <<'DONE'
         ~/mobile_robot_proto_type/check_devices.sh
 
 ■ 원격 종료 (PC 에서)
-        ssh frlab@172.30.1.45 robot-off
+    PowerShell:  .\scripts\robot-off.ps1      <- ping 끊길 때까지 자동 대기
+obot-off.ps1      <- ping 끊길 때까지 자동 대기
+    수동:        ssh robot robot-off
 
     ★ 절대 그냥 전원을 뽑지 마세요. 이 젯슨은 SD 카드로 부팅합니다.
       LED 가 꺼지고 팬이 멈춘 뒤에 어댑터를 뽑으세요.
-
-■ 종료 완료 확인 (PC 에서)
-        ping 172.30.1.45        # 응답이 끊기고 20초 더 기다린 뒤 전원 차단
 
 DONE
