@@ -6,7 +6,6 @@
   <description>TODO: Package description</description>
   <maintainer email="e2b@e2box.co.kr">e2box</maintainer>
   <license>TODO: License declaration</license>
-  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>

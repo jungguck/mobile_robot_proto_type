@@ -6,7 +6,6 @@
 <description>The relayrobot_description package</description>
   <maintainer email="todo@todo.com">author</maintainer>
   <license>TODO: License declaration</license>
-  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>xacro</depend>
   <depend>rviz2</depend>

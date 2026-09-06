@@ -6,7 +6,6 @@
   <description>TODO: Package description</description>
   <maintainer email="frmaster@todo.todo">frmaster</maintainer>
   <license>TODO: License declaration</license>
-  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
