@@ -1,5 +1,6 @@
 import os
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -7,6 +8,17 @@ from ament_index_python.packages import get_package_share_directory
 import xacro
 
 def generate_launch_description():
+
+    # 0. 런치 인자
+    #    오도메트리 검증(STAGE 4)에는 라이다가 필요 없다. 라이다를 안 꽂은 상태로
+    #    실행하면 /dev/rplidar 를 못 열어 에러 로그만 계속 쌓이므로 끌 수 있게 한다.
+    #      ros2 launch relayrobot_description real_robot_260519.launch.py use_lidar:=false
+    use_lidar = LaunchConfiguration('use_lidar')
+    declare_use_lidar = DeclareLaunchArgument(
+        'use_lidar',
+        default_value='true',
+        description='LiDAR(sllidar_node) 실행 여부. 오도메트리만 볼 때는 false.'
+    )
 
     # 1. URDF 설정
     share_dir = get_package_share_directory('relayrobot_description')
@@ -36,6 +48,7 @@ def generate_launch_description():
         executable='sllidar_node',
         name = 'sllidar_node',
         output='screen',
+        condition=IfCondition(use_lidar),
         parameters=[{
             'channel_type': 'serial',
             'serial_port': '/dev/rplidar',
@@ -71,6 +84,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_use_lidar,
         rsp_node,
         imu_node,
         my_robot_driver,
