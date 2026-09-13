@@ -192,4 +192,15 @@
   `nearest_free` 가 **벽 건너편으로 시작점을 옮기던 것**(가시선 검사) / A\* 전개 상한 /
   **`nav` 모드 비상정지 안내 정정**(MPC 가 계속 쏘므로 "발행 멈추기" 는 성립 안 함 → `tmux kill-window`)
 - **안 고침**: `gui_control.py` 는 Trossen 로봇팔 컨트롤러로 이 저장소와 무관 — **커밋 제외**
+- **위키 정비 (SCHEMA Ingest 워크플로우)**: `log.md`/`index.md` 만 고치고 concepts 갱신을 빠뜨렸던 것을 보완.
+    - **신규** [[TF_Coordinate_System]] — 링크만 있고 페이지가 없던 고아 링크였다.
+      프레임 혼용의 결과, TF 조회 timeout 금지, 시계 동기
+    - **신규** [[MPC_Controller]] — 역시 고아 링크였다. QP infeasible 원인, 참조 궤적 생성,
+      파라미터 표, 계산 부하 실측
+    - **갱신** [[System_Architecture]] — A\*/MPC/watchdog 계층, **원격 운영 분담표**, 안전 원칙 추가.
+      데이터 흐름 4·5단계가 **토픽이 아니라 TF 로 위치를 받는다**는 점 명시
+    - **갱신** [[Debugging_Experience]] — 13(QP infeasible) / 14(프레임 혼용) /
+      15(**경로 없으면 장애물로 직진**) / 16(자율주행 비상정지) 추가.
+      **10번(stale 피드백)을 "미해결" → "해결(2026-09-13)"** 로 정정
+    - 남은 고아 링크: `ROS2_Packages` (index 에 미작성으로 명시)
 - **상세**: `docs/DEBUG_LOG_2026-09-13.md` 11~18절

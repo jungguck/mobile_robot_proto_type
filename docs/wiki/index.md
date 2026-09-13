@@ -4,12 +4,14 @@
 
 ## 🤖 Entities (객체)
 - [[Relay_Robot_Hardware]]: 사용된 모터, 센서 사양.
-- [[ROS2_Packages]]: 워크스페이스 내 주요 패키지 분석.
+- ⚠️ `ROS2_Packages`: **아직 페이지 없음** (링크만 존재). 패키지별 분석 필요.
 
 ## 💡 Concepts (개념)
-- [[System_Architecture]]: 전체 데이터 흐름 및 레이어 구조.
-- [[TF_Coordinate_System]]: 좌표계 설계 및 보정 원리.
-- [[MPC_Controller]]: 제안된 제어기의 수학적 모델 및 구현.
+- [[System_Architecture]]: 전체 데이터 흐름, 레이어 구조, **원격 운영 분담**, 안전 원칙.
+- [[TF_Coordinate_System]]: 좌표계 설계와 보정 원리. **프레임을 섞으면 생기는 일**,
+  TF 조회에 timeout 을 주면 안 되는 이유, PC↔젯슨 시계 동기.
+- [[MPC_Controller]]: Tube-MPC 구조와 파라미터. **QP infeasible 원인**,
+  참조 궤적 생성, "경로 없으면 선다" 안전 규칙, 계산 부하 실측.
 
 ## 🛠️ Logs (기록)
 - [[Debugging_Experience]]: 발생했던 문제와 해결 과정의 집대성.
