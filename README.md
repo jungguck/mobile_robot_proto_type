@@ -71,10 +71,17 @@ graph TD
 Phase 0 ✅  하드웨어 검증      Motor / IMU / LiDAR 단독 테스트 + GUI
 Phase 1 ▶  Odometry 정밀 검증  EKF 융합 odom 정확도 확인 → SLAM 입력 기준 확보
 Phase 2    Cartographer SLAM   지도 생성 + map→odom TF 안정성 확인
-Phase 3    경로 계획 검증       A* 경로 계획기 + /global_path 토픽 시각화
-Phase 4    Tube-MPC 통합       짧은 구간 추종 → 파라미터 튜닝
+Phase 3 🧪 경로 계획 검증       A* 경로 계획기 + /global_path 토픽 시각화
+Phase 4 🧪 Tube-MPC 통합       짧은 구간 추종 → 파라미터 튜닝
 Phase 5    완전 자율주행        전체 파이프라인 통합 + 성능 검증
+
+  🧪 = 코드 완성 + 시뮬레이션(STAGE 5.5) 검증 완료. 실기 검증만 남음 (2026-09-13)
 ```
+
+> **막혀 있는 곳은 코드가 아니라 하드웨어다.** Phase 3·4 의 코드(A*, Tube-MPC)는 이미
+> 다 있고 `tools/mpc_sim.py` 리허설로 끝까지 주행까지 확인했다. 순서상 Phase 1(odom 캘리브)과
+> Phase 2(SLAM)를 실기로 통과해야 그 위에 얹을 수 있을 뿐이다.
+> **Phase 2(SLAM)는 새로 작성할 코드가 없다** — `cartographer.launch.py` 로 바로 간다.
 
 ### Phase 1 — Odometry 정밀 검증 (현재)
 
@@ -195,8 +202,8 @@ src/
 │
 ├── mpc_tubempc_bridge/
 │   └── src/mpc_tubempc_bridge/
-│       ├── bridge_node.py               # Tube-MPC 노드
-│       └── path_planner.py              # A* 경로 계획 노드
+│       ├── bridge_node.py               # Tube-MPC 노드 (+ /mpc/* 원격 관측 토픽)
+│       └── path_planner.py              # A* 경로 계획 노드 (+ 장애물 팽창)
 │
 ├── ddsm_example/mpc_tubempc/
 │   ├── TubeMPCPlanner.py                # Tube-MPC 알고리즘
@@ -204,6 +211,13 @@ src/
 │
 └── gui_py/
     └── gui_py/hardware_test.py          # 모터/IMU/LiDAR/Odom 통합 테스트 GUI
+
+tools/                                   # PC(개발기) 전용 진단 도구 — 젯슨에 빌드 불필요
+├── odom_check.py                        # 오도메트리 원격 진단/캘리브레이션
+└── mpc_sim.py                           # 로봇 없이 A*+MPC 를 돌리는 리허설 시뮬레이터
+
+src/relayrobot_description/config/
+└── nav.rviz                             # 자율주행 관측용 RViz 프리셋 (PC 에서 띄운다)
 ```
 
 ---
@@ -245,6 +259,12 @@ src/
 /scan + TF  ──►  cartographer_node  ──►  /map
                                     ──►  TF: map → odom
 
+[경로 계획 · 제어]  ※ 위치는 토픽이 아니라 TF(map→base_link)로 받는다
+/map + /mpc_goal + TF ──►  path_planner  ──►  /global_path
+                                         ──►  /inflated_map
+/global_path + TF     ──►  bridge_node   ──►  /cmd_vel
+                                         ──►  /mpc/reference_path, /mpc/tracking_error, /mpc/status
+
 [TF 트리]
 map ──[cartographer]──► odom ──[ekf_node]──► base_link ──[robot_state_publisher]──► lidar_v1_1
 ```
@@ -257,6 +277,16 @@ map ──[cartographer]──► odom ──[ekf_node]──► base_link ─�
 | `/scan` | `sensor_msgs/LaserScan` | sllidar_node |
 | `/map` | `nav_msgs/OccupancyGrid` | cartographer_node |
 | `/cmd_vel` | `geometry_msgs/Twist` | bridge_node |
+| `/global_path` | `nav_msgs/Path` | path_planner |
+| `/inflated_map` | `nav_msgs/OccupancyGrid` | path_planner (로봇 반경 팽창 결과) |
+| `/mpc/reference_path` | `nav_msgs/Path` | bridge_node (지금 호라이즌) |
+| `/mpc/tracking_error` | `geometry_msgs/Vector3` | bridge_node (e_act x, y, θ) |
+| `/mpc/status` | `std_msgs/String` | bridge_node (RUNNING/QP_FAILED/GOAL_REACHED/NO_POSE/NO_PATH) |
+
+> **왜 A\*/MPC 는 `/odom` 을 안 쓰고 TF 를 쓰나:** `/odom` 은 odom 프레임인데 지도·목표·경로는
+> map 프레임이다. 토픽을 그대로 빼면 **SLAM 이 드리프트를 보정한 만큼(map→odom)이 그대로
+> 추종 오차로 둔갑한다.** 그래서 두 노드 모두 `global_frame`(기본 `map`) → `base_link` TF 로
+> 현재 위치를 받는다. SLAM 없이 시험할 때는 `-p global_frame:=odom` 으로 내리면 그대로 돈다.
 
 ---
 
@@ -507,7 +537,78 @@ ros2 run gui_py hw_test
 
 ## 단계별 실행 가이드
 
-> 모든 터미널에서 `ros_setup` 실행 후 사용하세요.
+### 진행 순서 — 한 단계를 통과해야 다음으로 간다
+
+아래 계층은 **아래에서 위로** 쌓인다. 하위가 흔들리면 상위는 반드시 무너지므로,
+**통과 기준을 못 채웠으면 다음 단계로 넘어가지 않는다.**
+
+| 단계 | 무엇 | 터미널 | 통과 기준 | 실패하면 |
+|------|------|--------|-----------|----------|
+| **STAGE 0** | USB·전원·시계 | `PC-1` | 심볼릭 링크 3개 ✅, PC↔젯슨 시계 차 < 1s | 하드웨어 점검 |
+| **STAGE 1** | 모터 단독 | `젯슨-1` `PC-1` | 명령에 바퀴가 응답, `"Connected"` | udev / 전원 / `type:210` |
+| **STAGE 2** | IMU 단독 | `젯슨-1` `PC-1` | 40~60 Hz 발행 | `/dev/ttyimu` |
+| **STAGE 2-B** | **IMU yaw 방향** | `젯슨-1` `PC-1` `PC-2` | 왼쪽 회전에 yaw **증가(+)** | 부호 뒤집기 (아래) |
+| **STAGE 3** | LiDAR 단독 | `젯슨-1` `PC-1` `PC-2` | `/scan` 10 Hz | 보드레이트 1000000 |
+| **STAGE 4** | EKF 융합 odom | `젯슨-1` `PC-1` | 1m 직진 → 0.9~1.1 | STAGE 2-B 로 |
+| **STAGE 4-B** | **`/cmd_vel` watchdog** | `젯슨-1` `PC-1` | 0.5초 뒤 자동 정지 | 자율주행 금지 |
+| **STAGE 5** | SLAM | `젯슨-1` `젯슨-2` `PC-1` `PC-2` | `map→odom` 발행, 지도 닫힘 | STAGE 4 로 |
+| **STAGE 5.5** | **리허설 (로봇 없이)** | `PC-1`~`PC-5` | 목표 도달, QP 실패 0 | 코드 문제 |
+| **STAGE 6** | 자율주행 | `젯슨` tmux + `PC-1`~`PC-3` | 목표 도달 | STAGE 5.5 로 |
+
+> **STAGE 5.5 는 하드웨어가 없어도 지금 할 수 있다.** 순서상 여기 있지만 언제든 먼저 돌려도 된다.
+
+### 터미널 표기 규칙
+
+이 문서의 모든 명령은 **어느 기계의 몇 번째 터미널인지** 를 앞에 붙여 둔다.
+
+| 표기 | 어디서 | 여는 법 | 프롬프트 |
+|------|--------|---------|----------|
+| `[PC-n]` | **내 컴퓨터** | 터미널 새 창/탭 | `jk@jk:~$` |
+| `[젯슨-n]` | **로봇(젯슨)** | `ssh robot` 후 실행, 또는 `robot-up.sh` 의 tmux 창 | `frlab@frlab:~$` |
+
+```bash
+# 모든 터미널에서 공통으로 먼저 실행
+conda deactivate     # ⚠️ PC 는 conda(3.13)가 ROS 파이썬(3.12)을 가린다. 필수.
+ros_setup            # ROS + 워크스페이스 소싱
+```
+
+**젯슨 터미널을 여는 두 가지 방법:**
+```bash
+# (A) 명령 하나만 던질 때
+ssh robot '<명령>'
+
+# (B) 계속 붙어서 로그를 볼 때 — robot-up.sh 가 띄운 tmux 창
+ssh -t robot 'tmux attach -t robot'
+#   창 이동: Ctrl-b 다음 숫자   /   빠져나오기: Ctrl-b 누르고 d
+#   ⚠️ Ctrl-c 로 나가지 말 것 (노드가 죽는다)
+```
+
+> ⚠️ **RViz 와 rqt_plot 은 반드시 PC 에서.** 젯슨에서 띄우면 무선으로 화면을 밀어야 해서
+> 로봇이 느려진다. 젯슨은 노드만 돌린다.
+>
+> ⚠️ **지금 내가 PC 인가 젯슨인가** 를 프롬프트로 확인하는 습관을 들일 것.
+> `robot` 별칭은 PC 에만 있다 (2026-09-13 에 실제로 헷갈린 적 있음).
+
+---
+
+### STAGE 0: 연결 · 전원 · 시계 확인
+
+```bash
+# [PC-1] 장치 3개가 다 붙었는지
+ssh robot 'lsusb; ls -l /dev/motor /dev/rplidar /dev/ttyimu'
+
+# [PC-1] PC 와 젯슨의 시계 차이 — 1초 이상 벌어지면 안 된다
+ssh robot 'date -u +%s.%N'; date -u +%s.%N
+```
+
+**왜 시계가 중요한가:** TF 는 타임스탬프로 보간한다. 두 기계의 시계가 어긋나면
+PC RViz 에서 `TF extrapolation` 에러가 나고 **지도가 아예 안 그려진다.**
+어긋나 있으면 젯슨에 `sudo apt install chrony` 로 NTP 를 맞춘다.
+
+**전원 순서:** 전부 끄기 → USB 전부 꽂기 → 모터 보드 12V → **젯슨 전원 마지막.**
+모터 보드는 **전원 사이클마다** `{"T":11002,"type":210}` 초기화가 1회 필요하다.
+
+**통과 기준:** 심볼릭 링크 3개 모두 `✅`, 시계 차 < 1초
 
 ---
 
@@ -516,10 +617,10 @@ ros2 run gui_py hw_test
 **목표:** DDSM400 시리얼 통신 확인, 전진/후진/회전 명령에 실제 응답 확인
 
 ```bash
-# [터미널 1] 모터 + 휠 오도메트리 노드
+# [젯슨-1] 모터 + 휠 오도메트리 노드
 ros2 run relayrobot_description real_robot_driver_260519
 
-# [터미널 2] 전진 명령
+# [PC-1] 전진 명령
 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
   "{linear: {x: 0.1}, angular: {z: 0.0}}" --once
 
@@ -527,7 +628,7 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
   "{linear: {x: 0.0}, angular: {z: 0.0}}" --once
 
-# [터미널 3] 오도메트리 확인
+# [PC-1] 오도메트리 확인
 ros2 topic echo /odom_raw --field twist.twist.linear
 ```
 
@@ -549,11 +650,11 @@ ros2 topic echo /odom_raw --field twist.twist.linear
 > **주의:** 노드 시작 후 10초간 캘리브레이션이 진행됩니다. 이 시간 동안 로봇을 움직이지 마세요.
 
 ```bash
-# [터미널 1] IMU 노드
+# [젯슨-1] IMU 노드
 ros2 run ebimu_pkg ebimu_publisher \
   --ros-args -p port:=/dev/ttyimu -p frame_id:=base_link
 
-# [터미널 2] 데이터 확인
+# [PC-1] 데이터 확인
 ros2 topic hz /ebimu_data          # 목표: 40~60 Hz
 ros2 topic echo /ebimu_data --field orientation
 ```
@@ -569,12 +670,77 @@ ros2 topic echo /ebimu_data --field orientation
 
 ---
 
+### STAGE 2-B: IMU yaw **방향** 테스트 — 부호 하나가 전체를 뒤집는다
+
+**목표:** 로봇을 왼쪽(반시계)으로 돌렸을 때 yaw 가 **+ 방향으로 증가**하는지 확인
+
+> **왜 따로 단계를 두나:** `ekf.yaml` 은 **방향을 IMU 하나에만 맡긴다**
+> (`imu0_config` 의 yaw 만 true, 바퀴 yaw 는 전부 false). 그래서 **IMU yaw 부호가 반대면
+> EKF 가 로봇의 진행 방향을 거울로 뒤집어 적분한다.** 그 `/odom` 이 그대로 SLAM 의
+> prior 로 들어가므로 지도가 통째로 망가진다. 크기(스케일)가 아니라 **부호**가 문제라
+> 값만 봐서는 눈치채기 어렵다 — 그래서 회전을 직접 시켜보고 확인한다.
+>
+> ROS 규약(REP-103)은 **반시계(왼쪽) 회전이 +z** 다.
+
+```bash
+# [젯슨-1] IMU 노드 (캘리브레이션 10초 — 이 동안 로봇을 건드리지 말 것)
+ros2 run ebimu_pkg ebimu_publisher \
+  --ros-args -p port:=/dev/ttyimu -p frame_id:=base_link
+
+# [PC-1] yaw 를 도(°)로 계속 찍어보기
+python3 - <<'EOF'
+import math, rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+rclpy.init()
+n = Node('yaw_watch')
+def cb(m):
+    q = m.orientation
+    yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
+    print(f'yaw = {math.degrees(yaw):+7.2f}°', end='\r', flush=True)
+n.create_subscription(Imu, '/ebimu_data', cb, 10)
+rclpy.spin(n)
+EOF
+
+# [PC-2] 로봇을 손으로 천천히 왼쪽(반시계)으로 90° 돌린다
+#        모터로 돌리려면:
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
+  "{linear: {x: 0.0}, angular: {z: 0.5}}" --rate 10 --times 30
+```
+
+| 관측 | 판정 | 조치 |
+|------|------|------|
+| 왼쪽 회전 → yaw **증가**(예: 0° → +90°) | ✅ 정상 | 다음 단계로 |
+| 왼쪽 회전 → yaw **감소**(0° → −90°) | ❌ **부호 반대** | 아래 조치 |
+| 값이 튀거나 안 변함 | ❌ 통신/장착 | `imu_test_1.py` 로 raw 확인 |
+
+**부호가 반대일 때:** `src/ebimu_pkg/ebimu_pkg/ebimu_publisher.py` 의 `timer_callback()` 에서
+yaw 를 뒤집는다 (IMU 를 거꾸로 장착했거나 센서 축 규약이 반대인 경우다).
+
+```python
+yaw_deg = d[2] - 360 if d[2] > 180 else d[2]
+yaw = math.radians(yaw_deg)
+yaw = -yaw          # ← 부호 반대일 때만 추가
+```
+
+> **STAGE 4 로 교차 검증:** `tools/odom_check.py` 의 **② 회전 스케일 = `raw_Δθ / imu_Δyaw`** 가
+> **음수(≈ −1.0)로 나오면 부호 불일치**다. 크기는 맞는데 부호만 틀린 경우를 정확히 잡아준다.
+> ```bash
+> # [PC-2] 두 회전량을 겹쳐 보기
+> rqt_plot /odom_check/raw_theta_deg /odom_check/imu_dyaw_deg
+> ```
+> 두 곡선이 **같은 방향으로** 움직여야 정상이다. 거울처럼 갈라지면 부호가 반대다.
+
+**통과 기준:** 왼쪽 회전에 yaw 증가(+), `odom_check` 회전 스케일이 **양수**
+
+---
+
 ### STAGE 3: LiDAR 단독 테스트
 
 **목표:** /scan 발행 확인, RViz에서 장애물 시각화
 
 ```bash
-# [터미널 1] LiDAR 노드 (RPLidar S3)
+# [젯슨-1] LiDAR 노드 (RPLidar S3)
 ros2 run sllidar_ros2 sllidar_node \
   --ros-args \
   -p serial_port:=/dev/rplidar \
@@ -582,10 +748,10 @@ ros2 run sllidar_ros2 sllidar_node \
   -p frame_id:=lidar_v1_1 \
   -p scan_mode:=DenseBoost
 
-# [터미널 2]
+# [PC-1]
 ros2 topic hz /scan                # 목표: 10 Hz 이상
 
-# [터미널 3] RViz
+# [PC-2] RViz
 rviz2
 # Fixed Frame: lidar_v1_1 / Add: LaserScan → Topic: /scan
 ```
@@ -608,15 +774,15 @@ rviz2
 **목표:** 바퀴 오도메트리 + IMU → EKF 융합 → /odom 발행, TF 트리 완성  
 **선행 조건:** STAGE 1, 2 통과 (모터·IMU 정상 동작 확인)
 
-> 헤드리스(모니터 없음) 환경 기준. SSH 창 2개로 진행합니다.  
-> `tmux`가 있으면 한 SSH 세션에서 창 분할 가능: `tmux new` → `Ctrl-b %`
+> 노드는 **젯슨**, 확인·명령은 **PC** 에서 한다. 젯슨 터미널은 `ssh robot` 또는
+> `ssh -t robot 'tmux attach -t robot'` 으로 연다.
 
 ---
 
-#### Step 1. 노드 기동 (SSH 창 1)
+#### Step 1. 노드 기동 — `[젯슨-1]`
 
 ```bash
-# 먼저 빌드 (ebimu_pkg covariance 수정 반영)
+# 먼저 빌드
 cd ~/mobile_robot_proto_type
 colcon build --packages-select ebimu_pkg relayrobot_description
 source install/setup.bash
@@ -630,10 +796,10 @@ ros2 launch relayrobot_description real_robot_260519.launch.py
 
 ---
 
-#### Step 2. 토픽 생존 확인 (SSH 창 2)
+#### Step 2. 토픽 생존 확인 — `[PC-1]`
 
 ```bash
-# 세 토픽 모두 살아있어야 함
+# 세 토픽 모두 살아있어야 함 (PC 에서 DDS 로 젯슨 토픽을 본다)
 ros2 topic hz /odom_raw    # 목표: 10 Hz  (바퀴 인코더)
 ros2 topic hz /ebimu_data  # 목표: 50 Hz  (IMU)
 ros2 topic hz /odom        # 목표: 30 Hz  (EKF 출력)
@@ -644,7 +810,7 @@ ros2 topic echo /odom --once
 
 ---
 
-#### Step 3. 직진 1m 테스트 — RPM 팩터 검증
+#### Step 3. 직진 1m 테스트 — RPM 팩터 검증 — `[PC-1]`
 
 ```bash
 # 0.2 m/s × 50회(5초) ≈ 1m 전진
@@ -659,15 +825,18 @@ ros2 topic echo /odom --field pose.pose.position --once
 
 > ✅ **`rpm_scale`(`/600.0`)은 2026-09-03 기준 확정값입니다. 임의로 바꾸지 마세요.**
 > 명령 쪽(`calculate_rpms()` ×600)과 계측 쪽(`/600.0`)이 이미 일치합니다.
-> 값이 크게 어긋난다면 팩터가 아니라 **유령 거리 버그**(`timer_callback()` 명령 재전송 미적용)를
-> 먼저 의심하세요. 자세한 내용은 `docs/DEBUG_LOG_2026-09-03.md` 3절.
+> 값이 크게 어긋난다면 팩터가 아니라 **유령 거리**(피드백 stale)를 먼저 의심하세요.
+> **2026-09-13 에 드라이버에 대책을 넣었습니다** — 10Hz 명령 재전송 +
+> `feedback_timeout`(0.3s) 초과 시 속도를 0 으로 간주. 드라이버 로그에
+> `모터 피드백 ...s 없음` 경고가 뜨면 그 경로입니다.
+> 배경은 `docs/DEBUG_LOG_2026-09-03.md` 3절, 대책은 `DEBUG_LOG_2026-09-13.md` 12-1 절.
 
 ---
 
-#### Step 4. 제자리 회전 90° 테스트 — wheel_base 검증
+#### Step 4. 제자리 회전 90° 테스트 — wheel_base 검증 — `[PC-1]`
 
 ```bash
-# odom 초기화를 위해 드라이버 재시작 권장 (SSH 창 1 Ctrl-C 후 재기동)
+# odom 초기화를 위해 드라이버 재시작 권장 ([젯슨-1] 에서 Ctrl-C 후 재기동)
 
 # 0.5 rad/s × 63회(6.3초) ≈ π/2 rad (90°)
 ros2 topic pub /cmd_vel geometry_msgs/Twist \
@@ -688,7 +857,7 @@ ros2 topic echo /odom --field pose.pose.orientation --once
 
 ---
 
-#### Step 5. TF 트리 확인
+#### Step 5. TF 트리 확인 — `[PC-1]`
 
 ```bash
 ros2 run tf2_ros tf2_echo odom base_link
@@ -718,31 +887,63 @@ ros2 run tf2_ros tf2_echo odom base_link
 
 ---
 
+#### STAGE 4-B: `/cmd_vel` watchdog 확인 — 자율주행 전 필수 안전 점검
+
+MPC 는 10Hz 로 `/cmd_vel` 을 쏜다. 그 노드가 죽거나 무선이 끊겼을 때 로봇이 서야 한다.
+DDSM 은 **명령 유지형**이라 이 확인 없이 자율주행에 들어가면 안 된다.
+
+**선행 조건:** STAGE 4 의 `real_robot_260519.launch.py` 가 `[젯슨-1]` 에서 실행 중
+
+```bash
+# [PC-1] 한 번만 쏘고 그만둔다
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}" --once
+
+# [PC-2] 정지 상태에서 x 가 더 이상 안 늘어나야 한다 (유령 거리 차단)
+ros2 topic echo /odom_raw --field pose.pose.position
+
+# [젯슨-1] 드라이버 로그에 이 줄이 떠야 한다:
+#   "/cmd_vel 두절 0.5x s > 0.5s -> 정지"
+```
+
+**기대 동작:** 잠깐 움직이다 **0.5초 뒤 스스로 정지**
+
+| 확인 | 완료 기준 |
+|------|-----------|
+| watchdog | 명령을 끊으면 `cmd_timeout`(0.5s) 안에 정지 |
+| 유령 거리 | 정지 후 `/odom_raw` 의 x/y 가 고정 (계속 늘면 실패) |
+| 피드백 | 모터 피드백 경고(`피드백 ...s 없음`)가 주행 중에는 안 뜸 |
+
+> 타임아웃을 바꾸려면: `--ros-args -p cmd_timeout:=0.5 -p feedback_timeout:=0.3`
+
+---
+
 ### STAGE 5: SLAM (Cartographer) 매핑
 
 **목표:** 지도 생성, TF map→odom 발행 확인
 
-**선행 조건:** STAGE 4의 `real_robot_260519.launch.py`가 실행 중이어야 함
+**선행 조건:** STAGE 4·4-B 통과. `real_robot_260519.launch.py` 가 `[젯슨-1]` 에서 실행 중
+
+> **두 개를 한 번에 띄우려면** `[PC-1]` 에서 `ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh slam'`
+> — 젯슨 tmux 에 `1=robot` `2=slam` 창이 생긴다. 아래는 손으로 하나씩 띄우는 방법이다.
 
 ```bash
-# [터미널 2] Cartographer 실행
+# [젯슨-2] Cartographer 실행
 ros2 launch relayrobot_description cartographer.launch.py
 
-# [터미널 3] 확인
+# [PC-1] 확인
 ros2 topic hz /map
 ros2 run tf2_ros tf2_echo map odom
 
-# [터미널 4] 키보드 조종
+# [PC-2] 키보드 조종 (로봇이 움직인다 — 주변 확인)
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
-# [터미널 5] RViz
-rviz2
-# Fixed Frame: map / Add: Map(/map), LaserScan(/scan), TF
+# [PC-3] RViz — 준비된 프리셋을 쓴다 (Fixed Frame: map 이 이미 잡혀 있음)
+rviz2 -d ~/mobile_robot_proto_type/src/relayrobot_description/config/nav.rviz
 ```
 
-**지도 저장:**
+**지도 저장 — `[PC-1]`** (지도 파일은 젯슨에 생긴다):
 ```bash
-ros2 run nav2_map_server map_saver_cli -f ~/robot_map
+ssh robot 'ros2 run nav2_map_server map_saver_cli -f ~/robot_map'
 ```
 
 **실패 체크리스트:**
@@ -755,44 +956,134 @@ ros2 run nav2_map_server map_saver_cli -f ~/robot_map
 
 ---
 
+### STAGE 5.5: 하드웨어 없이 리허설 (`tools/mpc_sim.py`) — 실주행 전 권장
+
+**목표:** 로봇 없이 PC 한 대에서 A* + Tube-MPC 를 끝까지 돌려본다.
+젯슨이 꺼져 있어도, USB 가 빠져 있어도 된다. **실기에서 처음 보는 화면이 없게 만드는 단계다.**
+
+```bash
+conda deactivate && ros_setup
+
+# 실기(DOMAIN=0)와 섞이지 않도록 격리
+export ROS_DOMAIN_ID=42
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+
+# [PC-1] 가짜 지도 + 차동구동 적분 + TF(map→odom→base_link)
+python3 tools/mpc_sim.py
+
+# [PC-2] A*
+ros2 run mpc_tubempc_bridge mpc_tubempc_path_planner
+
+# [PC-3] Tube-MPC
+ros2 run mpc_tubempc_bridge mpc_tubempc_bridge --ros-args \
+  -p use_goal_topic:=true -p use_global_path:=true
+
+# [PC-4] RViz — 2D Goal Pose 툴이 /mpc_goal 로 발행되게 설정돼 있다
+rviz2 -d src/relayrobot_description/config/nav.rviz
+
+# [PC-5] 목표 (RViz 클릭 대신 명령으로)
+ros2 topic pub /mpc_goal geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: 3.0, y: 2.0}, orientation: {w: 1.0}}}" --once
+
+ros2 topic echo /mpc/status
+rqt_plot /mpc/tracking_error/x /mpc/tracking_error/y /mpc/tracking_error/z
+```
+
+**★ 프레임 정합 시험 (이 리허설의 핵심):**
+```bash
+python3 tools/mpc_sim.py --ros-args -p map_odom_x:=0.5 -p map_odom_y:=0.5 -p map_odom_yaw:=0.3
+```
+실제 SLAM 은 드리프트를 보정하느라 `map→odom` 이 0 이 아니다. 일부러 틀어놓고도
+추종이 되면 프레임 처리가 맞는 것이다. (2026-09-13 실측: offset 을 준 채 목표 도달, QP 실패 0회)
+
+**SLAM 없는 모드 확인:**
+```bash
+ros2 run mpc_tubempc_bridge mpc_tubempc_bridge --ros-args \
+  -p global_frame:=odom -p use_goal_topic:=false -p use_global_path:=false \
+  -p goal_x:=0.5 -p goal_y:=0.5
+```
+
+> **이 리허설이 못 잡아주는 것:** 모터 시리얼, `/cmd_vel` watchdog, 유령 거리, 센서 노이즈,
+> 바퀴 미끄러짐. 충돌 판정도 없다(경로가 벽을 뚫으면 로봇도 통과한다 — RViz 로 눈으로 볼 것).
+> 이것들은 STAGE 1~4 실기에서 확인한다.
+
+---
+
 ### STAGE 6: MPC 제어기 자율주행
 
 **목표:** 목표 좌표 → A* 경로 계획 → Tube-MPC 추종
 
 **선행 조건:** STAGE 5 통과, `polytope`·`cvxpy`·`cvxopt` 설치 완료
 
+**원격 운영이 기본이다.** 제어 루프(A*·MPC)는 **젯슨에서** 돈다 — 10Hz 루프를 무선 너머에
+두면 통신 끊김이 곧 제어 지터가 된다. **PC 는 보는 쪽 + 목표를 주는 쪽**이다.
+
 ```bash
-# [터미널 1] 하드웨어 launch (유지)
-ros2 launch relayrobot_description real_robot_260519.launch.py
+# [PC-1] 젯슨에 자율주행 스택을 한 번에 띄운다 (tmux 안에서 돌아 SSH 끊겨도 산다)
+ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh nav'
+#   젯슨 tmux 창: 0=shell  1=robot  2=slam  3=planner  4=mpc
+#   로그 보기: ssh -t robot 'tmux attach -t robot'   (빠져나올 때 Ctrl-b 누르고 d)
 
-# [터미널 2] Cartographer (유지)
-ros2 launch relayrobot_description cartographer.launch.py
+# [PC-1] 상태 — 이 창은 계속 켜둔다
+ros2 topic echo /mpc/status
 
-# [터미널 3] A* 경로 계획 노드
-ros2 run mpc_tubempc_bridge mpc_tubempc_path_planner
+# [PC-2] 추종 오차
+rqt_plot /mpc/tracking_error/x /mpc/tracking_error/y /mpc/tracking_error/z
 
-# [터미널 4] MPC Bridge 노드
-ros2 run mpc_tubempc_bridge mpc_tubempc_bridge \
-  --ros-args \
-  -p use_goal_topic:=true \
-  -p use_global_path:=true \
-  -p velocity_limit:=0.2 \
-  -p omega_limit:=1.0 \
-  -p horizon:=4
+# [PC-3] RViz — 지도 / 팽창지도 / A* 경로 / MPC 호라이즌을 한 화면에
+rviz2 -d ~/mobile_robot_proto_type/src/relayrobot_description/config/nav.rviz
 
-# [터미널 5] 목표 좌표 발행 (1~2m 이내 짧은 거리부터)
+# [PC-4] 목표 발행 (1~2m 이내 짧은 거리부터)
+#   RViz 의 2D Goal Pose 툴을 클릭해도 /mpc_goal 로 나간다.
 ros2 topic pub /mpc_goal geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}" \
   --once
 ```
+
+**손으로 하나씩 띄우려면** (`robot-up.sh nav` 대신 — 아래 4개는 **전부 젯슨**):
+```bash
+# [젯슨-1]
+ros2 launch relayrobot_description real_robot_260519.launch.py
+# [젯슨-2]
+ros2 launch relayrobot_description cartographer.launch.py
+# [젯슨-3]
+ros2 run mpc_tubempc_bridge mpc_tubempc_path_planner
+# [젯슨-4]
+ros2 run mpc_tubempc_bridge mpc_tubempc_bridge --ros-args \
+  -p use_goal_topic:=true -p use_global_path:=true \
+  -p velocity_limit:=0.1 -p omega_limit:=1.0 -p horizon:=4
+```
+
+> **왜 MPC 를 PC 에서 돌리지 않나:** 제어 루프가 10Hz 다. 무선 너머에 두면 **통신 끊김이
+> 곧 제어 지터**가 된다. 젯슨에서 돌리고 PC 는 `/mpc/*` 로 관찰만 한다.
+
+### ⚠️ 비상정지 — 자율주행 모드에서는 "명령을 멈추는" 것으로 안 된다
+
+STAGE 4-B(teleop)에서는 `/cmd_vel` 발행을 그만두면 watchdog 이 세웠다. **자율주행 모드는 다르다.**
+MPC 가 10Hz 로 `/cmd_vel` 을 **계속** 쏘고 있어서(정지 명령도 포함) 조작자가 "멈출 발행" 이 없다.
+**MPC 를 죽여야 한다.**
+
+```bash
+# [PC-1] MPC 만 끄기 — 가장 빠르다
+ssh robot 'tmux kill-window -t robot:mpc'
+
+# [PC-1] 전부 끄기
+ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh stop'
+```
+
+둘 다 MPC 가 멎으므로 **0.5초 뒤 드라이버 watchdog 이 모터를 세운다.**
+주행 전에 이 명령을 **미리 터미널에 쳐두고 엔터만 남겨두는 것**을 권한다.
 
 **실패 체크리스트:**
 ```
 [ ] ImportError (TubeMPCPlanner) → colcon build --symlink-install 재빌드
 [ ] ImportError (polytope/cvxpy) → pip3 install polytope cvxpy osqp cvxopt
 [ ] /global_path 없음 → Cartographer 실행 확인 (/map 수신 대기 중)
-[ ] "Start or goal cell is not free" → 장애물 위 좌표, 다른 지점 시도
-[ ] MPC QP failed → velocity_limit:=0.1, horizon:=4 로 줄여서 재시도
+[ ] "Goal cell is not free" → 팽창 반영 후 막힌 좌표. /inflated_map 을 RViz 에서 보고 다른 지점
+[ ] "TF map→base_link 없음" (/mpc/status = NO_POSE) → Cartographer 미기동 또는 PC·젯슨 시계 불일치
+[ ] /mpc/status = QP_FAILED 연속 → error_yaw_limit 확인 (아래 트러블슈팅)
+[ ] /mpc/status = NO_PATH → A* 가 경로를 못 냄. 계획기 로그 + /inflated_map 확인.
+    ※ 경로가 없으면 MPC 는 "선다". 지도를 무시하고 목표로 직진하지 않는다 (2026-09-13 수정)
 ```
 
 ---
@@ -931,6 +1222,28 @@ ros2 run tf2_ros tf2_monitor
 ros2 run mpc_tubempc_bridge mpc_tubempc_bridge \
   --ros-args -p velocity_limit:=0.1 -p horizon:=4
 ```
+
+### `/mpc/status` 가 계속 `QP_FAILED` — 로봇이 제자리에서 안 움직임 (2026-09-13 규명)
+
+**증상:** A* 경로는 잘 나오는데 MPC 가 100% `QP_FAILED`. 로봇이 조금 가다 선다.
+
+**원인:** heading 오차 상태 제약이 너무 좁았다. `error_yaw_limit` 은 tube 크기만큼
+타이트닝되므로 예전 기본값 `0.3` 은 **실효 0.25 rad(약 14°)** 가 된다. 그런데 A* 경로를
+따라갈 때 첫 참조점의 접선 방향과 로봇의 현재 방향은 출발 시 쉽게 20~30° 벌어진다
+→ **첫 사이클부터 제약 위반이라 QP 가 항상 infeasible.** 실측한 실패 경계가 정확히 0.25 rad 였다.
+
+**해결:** 현재 기본값은 `error_yaw_limit:=3.2`(사실상 무제한)다. heading 오차는 안전 제약이
+아니다 — 돌아서 줄이면 되는 값이다. 실제로 지켜야 할 것은 위치 오차(tube)이고
+그건 `error_xy_limit` 과 ancillary 되먹임이 담당한다.
+
+```bash
+# 값을 확인하고 싶을 때
+ros2 param get /mpc_tubempc_bridge error_yaw_limit    # 3.2 여야 정상
+```
+
+> **QP 부하는 걱정하지 않아도 된다.** 변수 8개·제약 40행짜리 작은 문제다.
+> PC(i5-12400F) 실측 평균 4.5 ms — 10Hz 루프 예산 100 ms 의 5%. 대부분이 cvxpy 의
+> 파이썬 오버헤드라 젯슨 ARM 에서 몇 배 느려져도 여유가 있다.
 
 ### udev 심볼릭 링크 없음
 ```bash

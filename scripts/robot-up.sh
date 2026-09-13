@@ -6,6 +6,8 @@
 # 사용법:
 #     ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh'          # 센서만 (기본)
 #     ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh full'     # 메인 launch 전체
+#     ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh slam'     # full + Cartographer
+#     ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh nav'      # slam + A* + Tube-MPC
 #     ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh stop'     # 전부 종료
 #     ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh status'   # 상태만 확인
 #
@@ -19,6 +21,12 @@
 #   sensors (기본) — 라이다 + IMU 만. 모터를 건드리지 않으므로 로봇이 움직일 일이 없다.
 #   full           — real_robot_260519.launch.py 전체 (모터 드라이버 + EKF + robot_state_publisher)
 #                    ★ 모터가 연결돼 있으면 /cmd_vel 에 따라 실제로 움직인다. 주변을 확인할 것.
+#   slam           — full + Cartographer. 지도를 만든다(map->odom TF 발행).
+#   nav            — slam + A* 경로계획 + Tube-MPC. ★★ /mpc_goal 을 받으면 스스로 주행한다.
+#
+# 시각화(RViz)는 절대 젯슨에서 띄우지 않는다. PC 에서 다음으로 띄운다:
+#     rviz2 -d <워크스페이스>/src/relayrobot_description/config/nav.rviz
+# 원격에서 상태를 보는 토픽: /mpc/status /mpc/tracking_error /mpc/reference_path /inflated_map
 
 set -uo pipefail
 
@@ -53,7 +61,7 @@ show_status() {
   pgrep -af "$WS/install/[^ ]*/lib/" | sed "s|$WS|~|" | sed 's/^/      /' || echo "      (없음)"
 
   echo "  발행 중인 토픽:"
-  for t in /scan /ebimu_data /odom_raw /odometry/filtered /joint_states; do
+  for t in /scan /ebimu_data /odom_raw /odom /joint_states /map /global_path; do
     # 타임아웃이 짧으면 10Hz 토픽의 첫 샘플을 놓쳐 "안 나온다" 고 오해하게 된다.
     hz=$(timeout 8 ros2 topic hz "$t" 2>/dev/null | grep -oE "average rate: [0-9.]+" | head -1 | grep -oE "[0-9.]+")
     if [ -n "$hz" ]; then
@@ -80,7 +88,14 @@ if [ "$MODE" = "status" ]; then
 fi
 
 # ── 기동 ──────────────────────────────────────────────────────────────────────
-[ "$MODE" = "sensors" ] || [ "$MODE" = "full" ] || die "모드는 sensors | full | stop | status 중 하나입니다 (받은 값: $MODE)"
+case "$MODE" in
+  sensors|full|slam|nav) ;;
+  *) die "모드는 sensors | full | slam | nav | stop | status 중 하나입니다 (받은 값: $MODE)" ;;
+esac
+
+# full 이상은 전부 모터를 쓴다 (센서 전용 모드만 예외)
+NEEDS_MOTOR=false
+[ "$MODE" != "sensors" ] && NEEDS_MOTOR=true
 
 step "기존 노드 정리 (중복 기동 방지)"
 tmux kill-session -t "$SESSION" 2>/dev/null && ok "이전 tmux 세션 종료" || true
@@ -91,8 +106,20 @@ step "장치 확인"
 for d in /dev/rplidar /dev/ttyimu; do
   [ -e "$d" ] && ok "$d -> $(readlink -f $d)" || die "$d 가 없습니다. USB 연결과 udev 규칙을 확인하세요."
 done
-if [ "$MODE" = "full" ]; then
+if [ "$NEEDS_MOTOR" = true ]; then
   [ -e /dev/motor ] && ok "/dev/motor -> $(readlink -f /dev/motor)" || die "/dev/motor 가 없습니다."
+fi
+
+# SLAM/자율주행 모드는 apt 패키지가 더 필요하다. 없으면 창만 뜨고 조용히 죽으므로 먼저 본다.
+if [ "$MODE" = "slam" ] || [ "$MODE" = "nav" ]; then
+  ros2 pkg prefix cartographer_ros >/dev/null 2>&1 \
+    && ok "cartographer_ros 설치됨" \
+    || die "cartographer_ros 가 없습니다. sudo apt install ros-humble-cartographer-ros"
+fi
+if [ "$MODE" = "nav" ]; then
+  python3 -c "import cvxpy, osqp, polytope, scipy.ndimage" 2>/dev/null \
+    && ok "MPC 의존 파이썬 패키지 확인" \
+    || die "cvxpy/osqp/polytope/scipy 가 없습니다. pip3 install cvxpy osqp polytope cvxopt scipy"
 fi
 
 ENV_SETUP="source /opt/ros/humble/setup.bash && source $WS/install/setup.bash"
@@ -113,6 +140,32 @@ else
     "$ENV_SETUP && ros2 launch relayrobot_description real_robot_260519.launch.py; exec bash"
   ok "robot 창 생성 (메인 launch)"
   warn "모터가 연결돼 있습니다. /cmd_vel 을 보내면 실제로 움직입니다."
+
+  if [ "$MODE" = "slam" ] || [ "$MODE" = "nav" ]; then
+    # 드라이버/EKF 가 TF 를 내보내기 시작한 뒤에 붙어야 초기 스캔을 버리지 않는다
+    sleep 5
+    tmux new-window -t "$SESSION" -n slam -c "$WS" \
+      "$ENV_SETUP && ros2 launch relayrobot_description cartographer.launch.py; exec bash"
+    ok "slam 창 생성 (Cartographer)"
+  fi
+
+  if [ "$MODE" = "nav" ]; then
+    # 지도가 한 장이라도 나온 뒤에 계획기를 붙인다
+    sleep 5
+    tmux new-window -t "$SESSION" -n planner -c "$WS" \
+      "$ENV_SETUP && ros2 run mpc_tubempc_bridge mpc_tubempc_path_planner; exec bash"
+    tmux new-window -t "$SESSION" -n mpc -c "$WS" \
+      "$ENV_SETUP && ros2 run mpc_tubempc_bridge mpc_tubempc_bridge --ros-args \
+         -p use_goal_topic:=true -p use_global_path:=true \
+         -p velocity_limit:=0.1 -p horizon:=4; exec bash"
+    ok "planner / mpc 창 생성"
+    warn "★★ 자율주행 모드입니다. /mpc_goal 을 발행하면 로봇이 스스로 출발합니다."
+    warn "    비상정지 — MPC 노드를 죽여야 합니다. 이 모드에서는 MPC 가 10Hz 로 /cmd_vel 을"
+    warn "    계속 쏘고 있으므로, '발행을 멈추는' 것만으로는 드라이버 watchdog 이 안 걸립니다."
+    warn "      ssh robot 'tmux kill-window -t $SESSION:mpc'     <- MPC 만 끄기 (가장 빠름)"
+    warn "      ssh robot '$WS/scripts/robot-up.sh stop'         <- 전부 끄기"
+    warn "    둘 다 MPC 가 멎으므로 0.5초 뒤 watchdog 이 모터를 세웁니다."
+  fi
 fi
 
 step "기동 대기 (IMU 캘리브레이션 10초 포함)"
@@ -128,7 +181,10 @@ cat <<DONE
 
   로그 직접 보기 :  ssh -t robot 'tmux attach -t robot'
                     (빠져나올 때 Ctrl-b 누르고 d — Ctrl-c 로 끄지 말 것)
-  창 이동         :  Ctrl-b 다음 숫자 (0=shell, 1=lidar, 2=imu)
+  창 이동         :  Ctrl-b 다음 숫자
+                    sensors: 0=shell 1=lidar 2=imu
+                    full:    0=shell 1=robot
+                    slam:    + 2=slam        nav: + 3=planner 4=mpc
   상태만 확인     :  ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh status'
   종료            :  ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh stop'
 

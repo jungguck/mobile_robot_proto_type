@@ -24,6 +24,12 @@ class MotorDriver:
         self.current_rpm_L = 0
         self.current_rpm_R = 0
 
+        # 마지막으로 "유효한 spd 프레임"을 받은 시각(단조시계).
+        # 0.0 = 아직 한 번도 못 받음. 이 값이 낡으면 current_rpm_* 는 유령값이다.
+        # 왜 필요한가: read_feedback() 은 새 프레임이 안 와도 직전 rpm 을 그대로
+        # 들고 있어서, 오도메트리가 멈춘 로봇의 속도를 계속 적분한다(유령 거리).
+        self.last_feedback_time = 0.0
+
         print(f"Connecting to motor driver...")
         try:
             self.ser = serial.Serial(port, baudrate, timeout=0.05) # 타임아웃 짧게
@@ -90,8 +96,7 @@ class MotorDriver:
             try:
                 line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                 if not line: continue
-                print(f"Debug faw data : {line}")
-                
+
                 # JSON 파싱 시도
                 try:
                     data = json.loads(line)
@@ -109,15 +114,27 @@ class MotorDriver:
                     # 이 함수를 쓰는 쪽은 부호를 다시 뒤집지 말 것.
                     if motor_id == self.MOTOR_ID_L:
                         self.current_rpm_L = self.DIR_L * rpm
+                        self.last_feedback_time = time.monotonic()
 
                     elif motor_id == self.MOTOR_ID_R:
                         self.current_rpm_R = self.DIR_R * rpm
-                        
+                        self.last_feedback_time = time.monotonic()
+
             except Exception as e:
                 print(f"Read Error: {e}")
         
         # 가장 최신으로 업데이트된 RPM 값을 리턴
         return self.current_rpm_L, self.current_rpm_R
+
+    def feedback_age(self):
+        """마지막 유효 피드백 이후 흐른 시간(초).
+
+        한 번도 못 받았으면 inf. 호출하는 쪽은 이 값이 임계치를 넘으면
+        current_rpm_* 를 신뢰하지 말고 0 으로 간주해야 한다.
+        """
+        if self.last_feedback_time == 0.0:
+            return float('inf')
+        return time.monotonic() - self.last_feedback_time
 
     def drive(self, v, w):
         cmd_L, cmd_R = self.calculate_rpms(v, w)

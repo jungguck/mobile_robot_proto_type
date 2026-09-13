@@ -32,10 +32,18 @@ class RealRobotDriver260519(Node):
         self.declare_parameter('wheel_base', 0.22)
         self.declare_parameter('rpm_scale', 600.0)
 
+        # 안전 타임아웃. DDSM 은 "명령 유지형" 이라 /cmd_vel 이 끊겨도 마지막 속도로
+        # 계속 굴러간다 -> 상위 노드(MPC)가 죽거나 무선이 끊기면 로봇이 안 선다.
+        self.declare_parameter('cmd_timeout', 0.5)
+        # 피드백이 이만큼 끊기면 current_rpm_* 는 유령값으로 보고 속도 0 으로 취급한다.
+        self.declare_parameter('feedback_timeout', 0.3)
+
         port              = self.get_parameter('port').value
         self.wheel_radius = self.get_parameter('wheel_radius').value
         self.wheel_base   = self.get_parameter('wheel_base').value
         self.rpm_scale    = self.get_parameter('rpm_scale').value
+        self.cmd_timeout      = float(self.get_parameter('cmd_timeout').value)
+        self.feedback_timeout = float(self.get_parameter('feedback_timeout').value)
 
         try:
             # 명령/오도메트리가 같은 기구학 상수를 쓰도록 드라이버에 그대로 주입
@@ -65,6 +73,13 @@ class RealRobotDriver260519(Node):
 
         self.last_time = self.get_clock().now()
 
+        # /cmd_vel 은 저장만 하고 실제 시리얼 송신은 타이머가 전담한다(아래 timer_callback).
+        # 콜백에서 바로 쏘면 타이머의 송신과 시리얼을 두고 경합한다.
+        self.cmd_v = 0.0
+        self.cmd_w = 0.0
+        self.last_cmd_time = None    # None = 아직 한 번도 안 받음
+        self.cmd_timed_out = False   # 두절 경고를 한 번만 찍기 위한 래치
+
         # /odom_raw: 순수 바퀴 인코더 odom. EKF가 이걸 받아 IMU와 융합 → /odom 출력
         # /odom을 직접 발행하지 않는 이유: EKF 출력과 토픽 이름 충돌 방지
         self.odom_pub  = self.create_publisher(Odometry,   'odom_raw',     10)
@@ -79,17 +94,55 @@ class RealRobotDriver260519(Node):
         self.get_logger().info("Real Robot Driver Started (Wheel Odom Only)...")
 
     def cmd_vel_callback(self, msg):
-        if not self.driver:
-            return
-        self.driver.drive(msg.linear.x, msg.angular.z)
+        # 저장만 한다. 송신은 timer_callback 이 10Hz 로 재전송한다.
+        self.cmd_v = msg.linear.x
+        self.cmd_w = msg.angular.z
+        self.last_cmd_time = self.get_clock().now()
 
     def timer_callback(self):
         if not self.driver:
             return
 
+        now = self.get_clock().now()
+
+        # ── 1) /cmd_vel watchdog ──────────────────────────────────────────────
+        # 명령이 낡으면 0 으로 강제한다. 상위 노드가 죽든 무선이 끊기든,
+        # cmd_timeout 안에 로봇이 선다. 비상정지는 "명령을 멈추는 것" 으로 충분하다.
+        if self.last_cmd_time is None:
+            cmd_age = float('inf')
+        else:
+            cmd_age = (now - self.last_cmd_time).nanoseconds / 1e9
+
+        if cmd_age > self.cmd_timeout:
+            # 기동 직후(명령을 한 번도 안 받은 상태)는 경고할 일이 아니다.
+            if not self.cmd_timed_out and self.last_cmd_time is not None:
+                self.get_logger().warn(
+                    f'/cmd_vel 두절 {cmd_age:.2f}s > {self.cmd_timeout}s -> 정지')
+                self.cmd_timed_out = True
+            cmd_v, cmd_w = 0.0, 0.0
+        else:
+            self.cmd_timed_out = False
+            cmd_v, cmd_w = self.cmd_v, self.cmd_w
+
+        # ── 2) 매 사이클 재전송 ───────────────────────────────────────────────
+        # 유지형이라 한 번만 보내도 돌지만, 재전송해야 (a) 위에서 만든 0 이 실제
+        # 하드웨어까지 가고 (b) drive() 안의 read_feedback() 이 매 주기 돌아
+        # 피드백이 신선하게 유지된다.
+        self.driver.drive(cmd_v, cmd_w)
+
         # read_feedback() 이 하드웨어 장착 부호(DIR_L/DIR_R)를 이미 흡수해서
         # "+ = 로봇 전진" 으로 돌려준다. 여기서 다시 뒤집으면 안 된다.
         rpm_L, rpm_R = self.driver.read_feedback()
+
+        # ── 3) 피드백 stale 차단 (유령 거리) ──────────────────────────────────
+        # MotorDriver 는 새 프레임이 안 와도 직전 rpm 을 계속 들고 있다. 그대로
+        # 적분하면 멈춘 로봇이 odom 상으로는 계속 전진한다. 09-03 부터의 이월 과제.
+        fb_age = self.driver.feedback_age()
+        if fb_age > self.feedback_timeout:
+            self.get_logger().warn(
+                f'모터 피드백 {fb_age:.2f}s 없음 -> 속도 0 으로 간주 (유령 거리 방지)',
+                throttle_duration_sec=5.0)
+            rpm_L = rpm_R = 0
 
         # spd 는 RPM 이 아니라 0.1RPM 단위다. 즉 10 RPM = spd 100.
         #
@@ -110,7 +163,7 @@ class RealRobotDriver260519(Node):
         v     = (vl + vr) / 2.0
         w_enc = (vr - vl) / self.wheel_base
 
-        current_time = self.get_clock().now()
+        current_time = now
         dt = (current_time - self.last_time).nanoseconds / 1e9
         self.last_time = current_time
 
