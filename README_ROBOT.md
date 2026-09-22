@@ -12,37 +12,62 @@ Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어�
 
 ## 파일 구조 및 관계도
 
+> **2026-09-22 정리.** 안 쓰는 파일은 전부 `old_file/` 로 옮겼다 (지운 게 아니다).
+> 무엇을 왜 옮겼는지는 `old_file/README.md`. 아래가 **지금 실제로 도는 전부**다.
+
+### 읽는 순서 (공부할 때)
+
+```
+1. real_robot_driver_260519.py   모터 + 바퀴 오도메트리 + TF     <- 여기부터
+2. motor_drive_1.py              시리얼 프로토콜 (부호·단위가 여기서 흡수됨)
+3. my_cartographer.lua           SLAM 파라미터
+4. path_planner.py               A* — 지도 팽창 + 격자 탐색
+5. bridge_node.py                Tube-MPC — 참조 궤적 + QP
+6. TubeMPCPlanner.py             MPC 수학 (제약 집합 / tube)
+```
+
+### 활성 파일 전체
+
 ```
 src/
-├── relayrobot_description/          # 핵심 패키지
-│   ├── config/
-│   │   ├── ekf.yaml                 # EKF 설정: odom0=/odom_raw, imu0=/ebimu_data
-│   │   └── my_cartographer.lua      # Cartographer SLAM 파라미터
+├── relayrobot_description/              ★ 로봇 본체 패키지
+│   ├── relayrobot_description/
+│   │   ├── real_robot_driver_260519.py  ★ 모터 + 휠 odom + TF (use_imu 로 동작 바뀜)
+│   │   ├── motor_drive_1.py             ★ DDSM 시리얼. 부호(DIR_L/DIR_R)·단위를 흡수
+│   │   ├── odom_calibrate.py              기구학 보정 도구 (직진/회전)
+│   │   └── odom_listener.py               /odom 을 터미널에 찍는 최소 예제
 │   ├── launch/
-│   │   ├── real_robot_260519.launch.py  # 전체 하드웨어 런치 (모터+IMU+LiDAR+EKF)
-│   │   └── cartographer.launch.py       # SLAM 런치
-│   ├── urdf/relayrobot.xacro        # 로봇 3D 모델 (링크/조인트 정의)
-│   └── relayrobot_description/
-│       ├── real_robot_driver_260519.py  # 모터 드라이버 + 휠 오도메트리 노드
-│       └── motor_drive_1.py             # DDSM400 JSON 시리얼 통신 클래스
+│   │   ├── real_robot_260519.launch.py  ★ 메인. 모터+LiDAR (+IMU/EKF 는 use_imu:=true)
+│   │   └── cartographer.launch.py       ★ SLAM
+│   ├── config/
+│   │   ├── my_cartographer.lua          ★ SLAM 파라미터 (use_imu_data=false)
+│   │   ├── ekf.yaml                       use_imu:=true 일 때만 쓰임
+│   │   └── nav.rviz                       PC 용 RViz 프리셋
+│   └── urdf/relayrobot.xacro            ★ 링크·조인트. lidar_v1_1 위치가 SLAM 에 직결
 │
-├── ebimu_pkg/
-│   └── ebimu_pkg/ebimu_publisher.py # IMU 드라이버 노드 (10초 캘리브레이션 포함)
-│
-├── sllidar_ros2/                    # RPLidar 드라이버 (C++)
-│
-├── mpc_tubempc_bridge/              # MPC 제어 패키지
+├── mpc_tubempc_bridge/                  ★ 자율주행 (SLAM -> A* -> MPC)
 │   └── src/mpc_tubempc_bridge/
-│       ├── bridge_node.py           # Tube-MPC 노드 (/odom → /cmd_vel)
-│       └── path_planner.py          # A* 경로 계획 노드 (/map → /global_path)
+│       ├── path_planner.py              ★ A* + 장애물 팽창 (/map -> /global_path)
+│       └── bridge_node.py               ★ Tube-MPC. TF(map->base_link)로 위치를 받는다
 │
-├── ddsm_example/mpc_tubempc/        # MPC 수학 라이브러리 (ROS 무관)
-│   ├── TubeMPCPlanner.py            # Tube-MPC 알고리즘 (polytope, cvxpy 필요)
-│   └── ReferenceGenerator.py        # 참조 궤적 생성
-│
-└── gui_py/                          # Tkinter GUI (선택 사항)
-    └── gui_py/main.py
+├── ddsm_example/
+│   ├── mpc_tubempc/TubeMPCPlanner.py    ★ MPC 수학. bridge_node 가 sys.path 로 가져온다
+│   │                                       (경로가 코드에 박혀 있어 옮기면 안 됨)
+│   └── ddsm_example/*.ino, json_cmd.h     보드 펌웨어 소스.
+│                                           프로토콜이 의심되면 문서 말고 이걸 본다
+├── ebimu_pkg/ebimu_pkg/ebimu_publisher.py  IMU 드라이버. use_imu:=true 일 때만
+├── gui_py/gui_py/hardware_test.py       ★ 원격 조종 GUI (/cmd_vel 발행). ssh -X 로 띄움
+├── relayrobot_driver/                     odom_sub — odom_listener 와 사실상 중복
+└── sllidar_ros2/                          서드파티. 우리는 sllidar_s2_launch.py 만 씀
+
+scripts/robot-up.sh                      ★ tmux 상시 기동 (sensors|full|slam|nav)
+tools/odom_check.py                        PC 에서 원격 오도메트리 진단
+tools/mpc_sim.py                           로봇 없이 MPC 리허설
+docs/DEBUG_LOG_<날짜>.md                  ★ 세션 기록. 최신 것이 정본
+old_file/                                  보관소. COLCON_IGNORE 라 빌드 영향 없음
 ```
+
+> ★ = 실주행 체인에 직접 관여. 나머지는 도구/보조.
 
 ### 토픽 / TF 흐름
 

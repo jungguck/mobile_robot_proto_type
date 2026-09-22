@@ -173,6 +173,12 @@ Phase 0~5가 "한 대가 지도를 만들고 목표점까지 스스로 간다"�
 
 ## 파일 구조
 
+> **⚠️ 2026-09-22 정리됨.** 안 쓰는 파일은 `old_file/` 로 옮겼다 (지운 게 아니다).
+> 아래 트리에는 옮겨진 것이 섞여 있다. **지금 도는 파일만 보려면
+> `README_ROBOT.md` 의 "파일 구조 및 관계도"** 를, 무엇을 왜 옮겼는지는
+> `old_file/README.md` 를 볼 것.
+
+
 ```
 src/
 ├── relayrobot_description/
@@ -460,8 +466,8 @@ PY
 | **모터** (USB Single Serial, ttyACM0) | 평소 **무응답** (DDSM 명령을 보내야 hex 프레임 `\x01\xa0...` 로 응답) | 명령 없으면 침묵 |
 | **라이다** (CP210x) | **바이너리** (비-ASCII 바이트 덩어리, 실제 통신은 1000000 bps) | 스캔 프레임 |
 
-> 모터가 진짜 응답하는지까지 확인하려면, 저장소 루트의 `ddsm_raw_monitor.py` 로 속도 명령을 보내며
-> raw 응답(`spd`/`cur` 변화)을 봅니다: `python3 ddsm_raw_monitor.py`.
+> 모터가 진짜 응답하는지까지 확인하려면, 저장소 루트의 `old_file/ddsm_raw_monitor.py` 로 속도 명령을 보내며
+> raw 응답(`spd`/`cur` 변화)을 봅니다: `python3 old_file/ddsm_raw_monitor.py`.
 > (launch가 `/dev/motor` 를 점유 중이면 먼저 `Ctrl-C` 로 끄고 실행)
 
 > **권한도 함께 확인:** udev 규칙에 `MODE="0666"` 이 있어야 하고, 사용자가 `dialout` 그룹에 속해야
@@ -665,7 +671,7 @@ ros2 topic echo /ebimu_data --field orientation
 ```
 [ ] ls -la /dev/ttyimu              → 없으면 udev 재설정
 [ ] 로그에 "Calibration done!" 확인  → 없으면 10초 더 대기
-[ ] python3 src/ebimu_pkg/ebimu_pkg/imu_test_1.py  → raw 시리얼 데이터 직접 확인
+[ ] python3 old_file/src/ebimu_pkg/ebimu_pkg/imu_test_1.py  → raw 시리얼 데이터 직접 확인
 ```
 
 ---
@@ -1117,10 +1123,10 @@ DDSM 모터는 공장 출고 시 ID가 **1 또는 2**로 설정돼 있고, RS485
 ```bash
 # 1. 모터를 '한 개만' HAT에 연결  (반드시 1개! 2개면 둘 다 같은 ID로 바뀜)
 # 2. HAT 전원 ON 후 현재 ID 조회  (절대경로라 어느 폴더에서든 실행 가능)
-python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_id_check.py
+python3 ~/mobile_robot_proto_type/old_file/src/relayrobot_driver/relayrobot_driver/motor_id_check.py
 
 # 3. 이 모터를 원하는 ID로 변경 (예: 2번)
-python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_id_check.py 2
+python3 ~/mobile_robot_proto_type/old_file/src/relayrobot_driver/relayrobot_driver/motor_id_check.py 2
 
 # 4. HAT 전원 OFF → ON  (전원 사이클당 1회만 변경 가능, 끄면 저장됨)
 # 5. 다른 모터로 교체 후 위 과정 반복하여 ID=1 부여
@@ -1144,7 +1150,7 @@ python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_
 
 ```bash
 # 두 모터가 각각 R 단독 / L 단독 / 전진 순서로 도는지 확인 (어느 폴더에서든 실행 가능)
-python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_test_1.py
+python3 ~/mobile_robot_proto_type/old_file/src/relayrobot_driver/relayrobot_driver/motor_test_1.py
 ```
 
 ### 모터 제어 지연
@@ -1192,7 +1198,7 @@ ros2 topic list          # Robot PC에서 노드 실행 중일 때 토픽이 보
 
 ### 모터 미응답
 ```bash
-python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_test_1.py
+python3 ~/mobile_robot_proto_type/old_file/src/relayrobot_driver/relayrobot_driver/motor_test_1.py
 # "Connected" 출력 안 되면: USB → ESP32 모드 점퍼 → 전원 순서로 확인
 ```
 
@@ -1206,7 +1212,7 @@ ros2 pkg list | grep robot_localization
 ```bash
 sudo apt install ros-jazzy-slam-toolbox
 ros2 launch slam_toolbox online_async_launch.py \
-  params_file:=src/relayrobot_description/my_slam_params.yaml
+  params_file:=old_file/src/relayrobot_description/my_slam_params.yaml
 ```
 
 ### RViz에서 로봇 떨림 (TF 이중 발행)
