@@ -16,7 +16,9 @@ Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어�
 > | IMU 노드 | 안 띄움 | 띄움 |
 >
 > **아래 문서 곳곳의 `/odom_raw` 와 "EKF 가 TF 를 낸다" 는 `use_imu:=true` 기준입니다.**
-> 기본 구성의 최신 설명은 `README_ROBOT.md` 와 `docs/DEBUG_LOG_2026-09-22.md` 를 보세요.
+> 기본 구성의 최신 설명은 `docs/DEBUG_LOG_2026-09-22.md` 에 있습니다.
+>
+> *(예전에 따로 있던 `README_ROBOT.md` 는 2026-09-22 에 이 문서로 합쳤습니다.)*
 >
 > 매핑 중에는 **각속도 ≤ 0.5 rad/s, 선속도 ≤ 0.3 m/s** 를 지킵니다 (IMU 가 없으면
 > 스캔 내 모션 왜곡을 보정할 수단이 없습니다). teleop 기본값은 그 2배라 따로 낮춰야
@@ -45,6 +47,29 @@ Gazebo Classic 플러그인(`libgazebo_ros_diff_drive.so`, `libgazebo_ros_ray_se
 **코드 자체는 배포판 중립입니다.** rclpy/launch API를 배포판별로 갈리는 방식으로 쓰지 않고,
 `np.float`·`np.int` 같은 NumPy 2.0에서 제거된 별칭도 없어서 20.04~24.04 어디서든 그대로 빌드됩니다.
 바뀌는 건 아래 apt 명령의 배포판 이름뿐입니다.
+
+---
+
+### 실제 이 프로젝트의 구성 (2026-09-22)
+
+위 표는 "빌드가 되는 배포판" 이고, 아래가 **실제로 쓰는 조합**입니다.
+
+| | 로봇 (젯슨 Orin Nano) | 개발 PC |
+|---|---|---|
+| OS | **Ubuntu 22.04** (JetPack 6.2.1 / L4T 36.x) | Ubuntu 24.04 |
+| ROS | **Humble** | Jazzy |
+| 역할 | 드라이버·SLAM·A*·MPC — **제어 루프 전부** | RViz·rqt·진단 도구 |
+
+> **젯슨은 Jazzy 가 아니라 Humble 입니다.** JetPack 6.x 는 Ubuntu 24.04 가 아니라
+> **22.04** 입니다. `ros-jazzy-*` 를 젯슨에 설치하려 하면 패키지를 못 찾습니다.
+> 근거: `docs/DEBUG_LOG_2026-09-03.md` 4절, `docs/JETSON_SETUP.md`.
+>
+> PC(Jazzy) ↔ 젯슨(Humble) 은 표준 메시지만 쓰므로 cross-distro 로 토픽이 그대로
+> 오갑니다 (`ROS_DOMAIN_ID=0`). 근거: `docs/DEBUG_LOG_2026-09-07.md`.
+>
+> **numpy 는 2.2.6 이고 내리면 안 됩니다.** tube MPC 스택이 요구합니다. ROS
+> 라이브러리가 numpy 2 에서 깨지면 그 라이브러리를 올려서 풉니다
+> (`transforms3d>=0.4.2`). 근거: `docs/DEBUG_LOG_2026-09-06.md` 3절.
 
 ---
 
@@ -195,58 +220,65 @@ Phase 0~5가 "한 대가 지도를 만들고 목표점까지 스스로 간다"�
 
 ## 파일 구조
 
-> **⚠️ 2026-09-22 정리됨.** 안 쓰는 파일은 `old_file/` 로 옮겼다 (지운 게 아니다).
-> 아래 트리에는 옮겨진 것이 섞여 있다. **지금 도는 파일만 보려면
-> `README_ROBOT.md` 의 "파일 구조 및 관계도"** 를, 무엇을 왜 옮겼는지는
-> `old_file/README.md` 를 볼 것.
+> **2026-09-22 정리.** 안 쓰는 파일은 전부 `old_file/` 로 옮겼습니다(지운 게 아닙니다).
+> 무엇을 왜 옮겼는지는 `old_file/README.md`. 아래가 **지금 실제로 도는 전부**입니다.
 
+### 읽는 순서 (공부할 때)
+
+```
+1. real_robot_driver_260519.py   모터 + 바퀴 오도메트리 + TF     <- 여기부터
+2. motor_drive_1.py              시리얼 프로토콜 (부호·단위가 여기서 흡수됨)
+3. my_cartographer.lua           SLAM 파라미터
+4. path_planner.py               A* — 지도 팽창 + 격자 탐색
+5. bridge_node.py                Tube-MPC — 참조 궤적 + QP
+6. TubeMPCPlanner.py             MPC 수학 (제약 집합 / tube)
+```
+
+### 활성 파일 전체
 
 ```
 src/
-├── relayrobot_description/
-│   ├── config/
-│   │   ├── ekf.yaml                     # EKF 설정
-│   │   └── my_cartographer.lua          # Cartographer SLAM 파라미터
-│   ├── launch/
-│   │   ├── real_robot_260519.launch.py  # 전체 하드웨어 런치
-│   │   └── cartographer.launch.py       # SLAM 런치
-│   ├── scripts/
-│   │   ├── 99-robot-devices.rules       # udev 규칙 (USB 포트 고정)
-│   │   └── setup_udev_rules.sh          # udev 규칙 설치 스크립트
+├── relayrobot_description/              ★ 로봇 본체 패키지
 │   ├── relayrobot_description/
-│   │   └── real_robot_driver_260519.py  # 모터 드라이버 + 휠 오도메트리 노드
-│   └── urdf/relayrobot.xacro            # 로봇 3D 모델
+│   │   ├── real_robot_driver_260519.py  ★ 모터 + 휠 odom + TF (use_imu 로 동작 바뀜)
+│   │   ├── motor_drive_1.py             ★ DDSM 시리얼. 부호(DIR_L/DIR_R)·단위를 흡수
+│   │   ├── odom_calibrate.py              기구학 보정 도구 (직진/회전)
+│   │   └── odom_listener.py               /odom 을 터미널에 찍는 최소 예제
+│   ├── launch/
+│   │   ├── real_robot_260519.launch.py  ★ 메인. 모터+LiDAR (+IMU/EKF 는 use_imu:=true)
+│   │   └── cartographer.launch.py       ★ SLAM
+│   ├── config/
+│   │   ├── my_cartographer.lua          ★ SLAM 파라미터 (use_imu_data=false)
+│   │   ├── ekf.yaml                       use_imu:=true 일 때만 쓰임
+│   │   └── nav.rviz                       자율주행 관측용 RViz 프리셋 (PC 에서 띄움)
+│   └── urdf/relayrobot.xacro            ★ 링크·조인트. lidar_v1_1 위치가 SLAM 에 직결
 │
-├── relayrobot_driver/
-│   └── relayrobot_driver/
-│       ├── motor_id_check.py            # DDSM 모터 ID 조회/변경 도구
-│       ├── motor_test_1.py              # 모터 단독 통신 테스트
-│       └── motor_drive_1.py             # 시리얼 지연(10ms) 최적화 드라이버 모듈
-│
-├── ebimu_pkg/
-│   └── ebimu_pkg/ebimu_publisher.py     # IMU 드라이버 노드
-│
-├── sllidar_ros2/                        # RPLidar 드라이버 (C++)
-│
-├── mpc_tubempc_bridge/
+├── mpc_tubempc_bridge/                  ★ 자율주행 (SLAM -> A* -> MPC)
 │   └── src/mpc_tubempc_bridge/
-│       ├── bridge_node.py               # Tube-MPC 노드 (+ /mpc/* 원격 관측 토픽)
-│       └── path_planner.py              # A* 경로 계획 노드 (+ 장애물 팽창)
+│       ├── path_planner.py              ★ A* + 장애물 팽창 (/map -> /global_path)
+│       └── bridge_node.py               ★ Tube-MPC. TF(map->base_link)로 위치를 받는다
 │
-├── ddsm_example/mpc_tubempc/
-│   ├── TubeMPCPlanner.py                # Tube-MPC 알고리즘
-│   └── ReferenceGenerator.py
-│
-└── gui_py/
-    └── gui_py/hardware_test.py          # 모터/IMU/LiDAR/Odom 통합 테스트 GUI
+├── ddsm_example/
+│   ├── mpc_tubempc/TubeMPCPlanner.py    ★ MPC 수학. bridge_node 가 sys.path 로 가져온다
+│   │                                       (경로가 코드에 박혀 있어 옮기면 안 됨)
+│   └── ddsm_example/*.ino, json_cmd.h     보드 펌웨어 소스.
+│                                           프로토콜이 의심되면 문서 말고 이걸 본다
+├── ebimu_pkg/ebimu_pkg/ebimu_publisher.py  IMU 드라이버. use_imu:=true 일 때만
+├── gui_py/gui_py/hardware_test.py       ★ 원격 조종 GUI (/cmd_vel 발행). ssh -X 로 띄움
+└── sllidar_ros2/                          서드파티. 우리는 sllidar_s2_launch.py 만 씀
 
-tools/                                   # PC(개발기) 전용 진단 도구 — 젯슨에 빌드 불필요
-├── odom_check.py                        # 오도메트리 원격 진단/캘리브레이션
-└── mpc_sim.py                           # 로봇 없이 A*+MPC 를 돌리는 리허설 시뮬레이터
-
-src/relayrobot_description/config/
-└── nav.rviz                             # 자율주행 관측용 RViz 프리셋 (PC 에서 띄운다)
+scripts/robot-up.sh                      ★ tmux 상시 기동 (sensors|full|slam|nav)
+scripts/robot-off.sh / .ps1                안전 종료 (SD카드 보호)
+tools/odom_check.py                        PC 에서 원격 오도메트리 진단
+tools/mpc_sim.py                           로봇 없이 A*+MPC 리허설
+docs/DEBUG_LOG_<날짜>.md                  ★ 세션 기록. 최신 것이 정본
+old_file/                                  보관소. COLCON_IGNORE 라 빌드 영향 없음
 ```
+
+> ★ = 실주행 체인에 직접 관여. 나머지는 도구/보조.
+>
+> **워크스페이스 패키지는 5개입니다** (2026-09-22 에 `relayrobot_driver` 를 폐지하고
+> `odom_sub` 를 `odom_listener` 로 합쳤습니다).
 
 ---
 
@@ -256,7 +288,11 @@ src/relayrobot_description/config/
 |------|-------------|----------|
 | DDSM HAT(B) 모터 컨트롤러 | `/dev/motor` → ttyACM0 | USB-CDC, 115200 bps |
 | EBIMU9DOFV5 IMU | `/dev/ttyimu` → ttyUSB0 | UART, 115200 bps |
-| RPLidar S3 | `/dev/rplidar` → ttyUSB1 | UART, 1000000 bps |
+| RPLidar **S2/S3 계열** | `/dev/rplidar` → ttyUSB1 | UART, **1,000,000 bps** |
+
+> **A1/A2 가 아닙니다.** `sllidar_a1_launch.py`(115200)로 띄우면
+> `SL_RESULT_OPERATION_TIMEOUT` 으로 죽습니다. 단독 실행은
+> `sllidar_s2_launch.py serial_port:=/dev/rplidar`. (2026-09-06 실측 정정)
 
 > 위 매핑은 udev 규칙으로 자동 고정됩니다. 설정 방법은 아래 "USB 포트 고정" 섹션을 참고하세요.
 >
@@ -330,11 +366,11 @@ map ──[cartographer]──► odom ──[드라이버 또는 ekf_node]─�
 **Jazzy (Ubuntu 24.04):**
 ```bash
 sudo apt update && sudo apt install -y \
-  ros-jazzy-robot-localization \
-  ros-jazzy-cartographer-ros \
-  ros-jazzy-tf-transformations \
-  ros-jazzy-teleop-twist-keyboard \
-  ros-jazzy-nav2-map-server
+  ros-$ROS_DISTRO-cartographer-ros \
+  ros-$ROS_DISTRO-tf-transformations \
+  ros-$ROS_DISTRO-teleop-twist-keyboard \
+  ros-$ROS_DISTRO-nav2-map-server \
+  ros-$ROS_DISTRO-robot-localization   # use_imu:=true (EKF) 를 쓸 때만 필요
 ```
 
 **Humble (Ubuntu 22.04):**
@@ -560,10 +596,16 @@ ros2 run gui_py hw_test
   (구독 토픽은 `use_ekf` 파라미터가 정함: 기본 `/odom`, `-p use_ekf:=true` 면 `/odom_raw`)
 - **IMU**: 오도메트리 관련 값(yaw, gyro_z, acc_x, acc_y) + Hz. Start 직후 ~10초 캘리브레이션 안내(로봇 정지 유지)
 - **LiDAR**: `/scan` Hz, 포인트 수, 최소거리, 정면거리
-- **Odometry (`/odom`)**: EKF 융합 위치 `x/y/yaw` + 속도 `v/ω`. **EKF Start 전에 Motor·IMU 가 먼저 떠 있어야** `/odom` 이 발행됨.
+- **Odometry (`/odom`)**: 위치 `x/y/yaw` + 속도 `v/ω`.
+  기본 구성에서는 **Motor Start 만으로** `/odom` 이 나옵니다(드라이버가 직접 발행).
+  `-p use_ekf:=true` 로 띄운 경우에만 Motor·IMU → EKF Start 순서가 필요합니다.
 - 창을 닫거나(X) 터미널을 닫아도(`Ctrl-C`/SIGHUP) GUI가 띄운 드라이버 노드를 함께 종료.
 
-> `/odom` 확인 순서: **Motor Start → IMU Start(캘리브 10초) → EKF Start** → Odometry 패널에 값 표시.
+> `/odom` 확인 순서 (기본): **Motor Start** → Odometry 패널에 값 표시.
+> `-p use_ekf:=true` 인 경우: **Motor → IMU(캘리브 10초) → EKF Start**.
+>
+> ⚠️ 기본 구성에서 **EKF Start 는 막혀 있습니다.** 누르면 드라이버와 EKF 가
+> `odom→base_link` TF 를 이중 발행하기 때문입니다. 상태바에 이유가 뜹니다.
 
 아래 STAGE 1~6은 GUI 없이 터미널에서 단계별로 디버깅할 때의 수동 절차입니다.
 
@@ -677,7 +719,10 @@ ros2 topic echo /odom --field twist.twist.linear   # use_imu:=true 면 /odom_raw
 
 ---
 
-### STAGE 2: IMU 단독 테스트
+### STAGE 2: IMU 단독 테스트  *(선택 — `use_imu:=true` 로 갈 때만)*
+
+> **기본 구성에서는 건너뜁니다.** 2026-09-22 부터 IMU 없이 도는 것이 기본입니다.
+> 2D SLAM 의 yaw 는 라이다 scan matching 이 잡습니다. STAGE 1 → STAGE 3 으로 가세요.
 
 **목표:** EBIMU 데이터 수신, yaw 방향 정합성 확인
 
@@ -704,7 +749,16 @@ ros2 topic echo /ebimu_data --field orientation
 
 ---
 
-### STAGE 2-B: IMU yaw **방향** 테스트 — 부호 하나가 전체를 뒤집는다
+### STAGE 2-B: IMU yaw **방향** 테스트 — 부호 하나가 전체를 뒤집는다  *(선택)*
+
+> IMU 를 쓸 때만 해당합니다. **IMU 없는 기본 구성에서는 대신 바퀴 회전 부호를
+> 확인하세요** — 좌회전 시 `/odom` 의 yaw 가 **+ 로 증가**해야 합니다.
+> 뒤집혀 있으면 cartographer 가 받는 초기 추정이 매 회전마다 반대 방향이고,
+> 이번엔 바로잡아 줄 IMU 가 없습니다.
+> ```bash
+> ros2 topic echo /odom --field pose.pose.orientation   # 왼쪽으로 천천히 돌리면서
+> ```
+
 
 **목표:** 로봇을 왼쪽(반시계)으로 돌렸을 때 yaw 가 **+ 방향으로 증가**하는지 확인
 
@@ -774,7 +828,7 @@ yaw = -yaw          # ← 부호 반대일 때만 추가
 **목표:** /scan 발행 확인, RViz에서 장애물 시각화
 
 ```bash
-# [젯슨-1] LiDAR 노드 (RPLidar S3)
+# [젯슨-1] LiDAR 노드 (RPLidar S2/S3 계열)
 ros2 run sllidar_ros2 sllidar_node \
   --ros-args \
   -p serial_port:=/dev/rplidar \
@@ -803,10 +857,19 @@ rviz2
 
 ---
 
-### STAGE 4: Odometry (EKF 융합) 테스트
+### STAGE 4: Odometry + TF 테스트
 
-**목표:** 바퀴 오도메트리 + IMU → EKF 융합 → /odom 발행, TF 트리 완성  
-**선행 조건:** STAGE 1, 2 통과 (모터·IMU 정상 동작 확인)
+**목표:** `/odom` 발행 + `odom→base_link` TF, TF 트리 완성  
+**선행 조건:** STAGE 1 통과 (STAGE 2 = IMU 는 기본 구성에서 건너뜀)
+
+> **기본(`use_imu:=false`)**: 드라이버가 `/odom` 과 TF 를 직접 냅니다. EKF 안 띄웁니다.
+> `/odom` 은 **10 Hz**(드라이버 타이머)입니다 — EKF 의 30 Hz 가 아닙니다.
+>
+> **`use_imu:=true`**: 드라이버는 `/odom_raw` 만 내고 EKF 가 `/odom`(~30 Hz)과 TF 를
+> 냅니다. 이 경우 STAGE 2 를 먼저 통과해야 합니다.
+>
+> 드라이버 시작 로그의 이 줄로 어느 구성인지 바로 확인할 수 있습니다:
+> `Real Robot Driver Started (Wheel Odom Only) — odom_topic=/odom, publish_tf=True`
 
 > 노드는 **젯슨**, 확인·명령은 **PC** 에서 한다. 젯슨 터미널은 `ssh robot` 또는
 > `ssh -t robot 'tmux attach -t robot'` 으로 연다.
@@ -821,7 +884,8 @@ cd ~/mobile_robot_proto_type
 colcon build --packages-select ebimu_pkg relayrobot_description
 source install/setup.bash
 
-# 전체 하드웨어 launch (Motor + IMU + LiDAR + EKF + robot_state_publisher)
+# 전체 하드웨어 launch (Motor + LiDAR + robot_state_publisher)
+#   use_imu:=true 를 붙이면 IMU + EKF 도 함께 뜹니다
 ros2 launch relayrobot_description real_robot_260519.launch.py
 ```
 
@@ -895,7 +959,8 @@ ros2 topic echo /odom --field pose.pose.orientation --once
 
 ```bash
 ros2 run tf2_ros tf2_echo odom base_link
-# translation / rotation 숫자가 출력되면 EKF가 TF 발행 중 → 정상
+# translation / rotation 숫자가 출력되면 TF 발행 중 → 정상
+# (기본 구성에서는 드라이버가, use_imu:=true 면 ekf_node 가 발행)
 ```
 
 ---
@@ -1233,12 +1298,13 @@ python3 ~/mobile_robot_proto_type/old_file/src/relayrobot_driver/relayrobot_driv
 ### EKF /odom 미발행
 ```bash
 ros2 pkg list | grep robot_localization
-# 없으면: sudo apt install ros-jazzy-robot-localization
+# 없으면: sudo apt install ros-$ROS_DISTRO-robot-localization
+# (use_imu:=true 로 EKF 를 쓸 때만 필요. 기본 구성에서는 EKF 자체를 안 띄웁니다)
 ```
 
-### Cartographer apt 설치 안 될 때 (Jazzy)
+### Cartographer apt 설치 안 될 때
 ```bash
-sudo apt install ros-jazzy-slam-toolbox
+sudo apt install ros-$ROS_DISTRO-slam-toolbox
 ros2 launch slam_toolbox online_async_launch.py \
   params_file:=old_file/src/relayrobot_description/my_slam_params.yaml
 ```
@@ -1246,9 +1312,24 @@ ros2 launch slam_toolbox online_async_launch.py \
 ### RViz에서 로봇 떨림 (TF 이중 발행)
 ```bash
 ros2 run tf2_ros tf2_monitor
-# odom→base_link 발행자가 2개면 real_robot_driver의 TF 브로드캐스터 비활성화
-# (real_robot_driver_260519.py는 이미 비활성화됨)
+ros2 topic info /tf --verbose     # odom→base_link 발행 노드가 하나인지 확인
 ```
+
+**2026-09-22 기준, `odom→base_link` 발행자는 `use_imu` 가 정합니다.**
+
+| | 드라이버 `publish_tf` | `ekf_node` |
+|---|---|---|
+| `use_imu:=false` (기본) | **True** | 안 띄움 |
+| `use_imu:=true` | False | 띄움 |
+
+발행자가 둘이 되는 흔한 경로 두 가지:
+
+- `ros2 run relayrobot_driver main_driver` (= `old_file/.../motor_node_1.py`) —
+  `odom` 과 TF 를 **직접** 쏩니다. 띄우지 마세요. 기구학 상수도 낡았습니다.
+  젯슨에 예전 `install/relayrobot_driver/` 가 남아 있으면 아직 실행됩니다 →
+  `rm -rf build install log` 후 재빌드.
+- `hw_test` GUI 의 **EKF Start** — 기본 구성에서 누르면 드라이버와 겹칩니다.
+  그래서 `use_ekf=False` 일 때는 막아뒀습니다.
 
 ### MPC 발산 / 진동
 ```bash

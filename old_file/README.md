@@ -12,7 +12,7 @@ git mv old_file/src/ddsm_example/ddsm_python/simply.py src/ddsm_example/ddsm_pyt
 
 > **왜 옮겼나:** 모터 관련 코드 사본이 여러 벌 있어서 "지금 실제로 도는 게 어느 것인지"
 > 가 헷갈렸다. 공부할 때 읽어야 할 파일만 `src/` 에 남긴다.
-> 지금 살아있는 파일 목록은 `README_ROBOT.md` 의 **파일 구조** 절에 있다.
+> 지금 살아있는 파일 목록은 `README.md` 의 **파일 구조** 절에 있다.
 
 ---
 
@@ -65,6 +65,18 @@ DDSM 보드 제조사 예제와, 거기서 갈라져 나온 옛 드라이버 사
 > ⚠️ **젯슨에서는 `install/relayrobot_driver/` 가 남아 있을 수 있다.** 그러면
 > `ros2 run relayrobot_driver odom_sub` 가 낡은 사본으로 계속 돈다.
 > 깔끔하게 하려면 pull 후 `rm -rf build install log` 하고 다시 빌드할 것.
+
+### `README_ROBOT.md` — README.md 로 흡수 (2026-09-22)
+
+로봇 문서가 `README.md`(1350줄)와 `README_ROBOT.md`(509줄) 두 벌이었다. 내용이 크게
+겹치는데 **서로 다른 시점에 갱신돼서 모순이 쌓였다.** 실제로 2026-09-22 감사에서
+`README_ROBOT.md` 쪽만 `Ubuntu 24.04 / ROS2 Jazzy` 로 남아 있는 것이 발견됐다
+(로봇은 Humble 이다). 문서가 둘이면 한쪽만 고치게 된다.
+
+`README.md` 가 상위집합이라 그쪽을 정본으로 삼았다 — STAGE 0~6, 젯슨/PC 터미널 분리,
+`robot-up.sh`, `mpc_sim.py` 리허설, 비상정지, QP_FAILED 규명이 전부 `README.md` 에만
+있었다. `README_ROBOT.md` 의 고유분(활성 파일 지도 + 읽는 순서, 젯슨/PC 구성표,
+포트 매핑 정정)은 `README.md` 로 옮겼다.
 
 ### 일회성 테스트 노드
 
