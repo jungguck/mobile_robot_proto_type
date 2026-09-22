@@ -33,6 +33,9 @@ set -uo pipefail
 SESSION="robot"
 WS="$HOME/mobile_robot_proto_type"
 MODE="${1:-sensors}"
+# [2026-09-22] IMU 는 선택이다. 2D SLAM 의 yaw 는 라이다 scan matching 이 잡는다.
+#   USE_IMU=1 로 켜면 예전 구성(IMU + EKF 융합)으로 돌아간다.
+USE_IMU="${USE_IMU:-0}"
 
 GRN='\033[0;32m'; YLW='\033[1;33m'; RED='\033[0;31m'; BLU='\033[0;34m'; NC='\033[0m'
 step() { echo -e "\n${BLU}==> $*${NC}"; }
@@ -61,7 +64,8 @@ show_status() {
   pgrep -af "$WS/install/[^ ]*/lib/" | sed "s|$WS|~|" | sed 's/^/      /' || echo "      (없음)"
 
   echo "  발행 중인 토픽:"
-  for t in /scan /ebimu_data /odom_raw /odom /joint_states /map /global_path; do
+  # /odom 은 항상, /odom_raw 와 /ebimu_data 는 USE_IMU=1 일 때만 나온다
+  for t in /scan /odom /odom_raw /ebimu_data /joint_states /map /global_path; do
     # 타임아웃이 짧으면 10Hz 토픽의 첫 샘플을 놓쳐 "안 나온다" 고 오해하게 된다.
     hz=$(timeout 8 ros2 topic hz "$t" 2>/dev/null | grep -oE "average rate: [0-9.]+" | head -1 | grep -oE "[0-9.]+")
     if [ -n "$hz" ]; then
@@ -103,9 +107,17 @@ pkill -TERM -f "$WS/install/[^ ]*/lib/" 2>/dev/null && { ok "이전 노드 종�
 
 # 장치 확인 — 없는 채로 띄우면 노드가 조용히 죽고 원인 찾기가 번거롭다
 step "장치 확인"
-for d in /dev/rplidar /dev/ttyimu; do
-  [ -e "$d" ] && ok "$d -> $(readlink -f $d)" || die "$d 가 없습니다. USB 연결과 udev 규칙을 확인하세요."
-done
+[ -e /dev/rplidar ] && ok "/dev/rplidar -> $(readlink -f /dev/rplidar)" \
+  || die "/dev/rplidar 가 없습니다. USB 연결과 udev 규칙을 확인하세요."
+
+# IMU 는 선택. 없으면 IMU 없는 구성으로 계속 간다.
+if [ -e /dev/ttyimu ]; then
+  ok "/dev/ttyimu -> $(readlink -f /dev/ttyimu)"
+else
+  [ "$USE_IMU" = "1" ] && die "USE_IMU=1 인데 /dev/ttyimu 가 없습니다."
+  warn "/dev/ttyimu 없음 — IMU 없이 진행합니다 (라이다 scan matching 이 yaw 담당)"
+  USE_IMU=0
+fi
 if [ "$NEEDS_MOTOR" = true ]; then
   [ -e /dev/motor ] && ok "/dev/motor -> $(readlink -f /dev/motor)" || die "/dev/motor 가 없습니다."
 fi
@@ -132,17 +144,23 @@ if [ "$MODE" = "sensors" ]; then
   # ★ 이 라이다는 A1 이 아니라 S2 계열(1000000 보드)이다. a1 launch 로는 타임아웃으로 죽는다.
   tmux new-window -t "$SESSION" -n lidar -c "$WS" \
     "$ENV_SETUP && ros2 launch sllidar_ros2 sllidar_s2_launch.py serial_port:=/dev/rplidar; exec bash"
-  tmux new-window -t "$SESSION" -n imu -c "$WS" \
-    "$ENV_SETUP && ros2 run ebimu_pkg ebimu_publisher; exec bash"
-  ok "lidar / imu 창 생성"
+  if [ "$USE_IMU" = "1" ]; then
+    tmux new-window -t "$SESSION" -n imu -c "$WS" \
+      "$ENV_SETUP && ros2 run ebimu_pkg ebimu_publisher; exec bash"
+    ok "lidar / imu 창 생성"
+  else
+    ok "lidar 창 생성 (IMU 생략)"
+  fi
 else
+  [ "$USE_IMU" = "1" ] && IMU_ARG="use_imu:=true" || IMU_ARG="use_imu:=false"
   tmux new-window -t "$SESSION" -n robot -c "$WS" \
-    "$ENV_SETUP && ros2 launch relayrobot_description real_robot_260519.launch.py; exec bash"
-  ok "robot 창 생성 (메인 launch)"
+    "$ENV_SETUP && ros2 launch relayrobot_description real_robot_260519.launch.py $IMU_ARG; exec bash"
+  ok "robot 창 생성 (메인 launch, $IMU_ARG)"
   warn "모터가 연결돼 있습니다. /cmd_vel 을 보내면 실제로 움직입니다."
 
   if [ "$MODE" = "slam" ] || [ "$MODE" = "nav" ]; then
-    # 드라이버/EKF 가 TF 를 내보내기 시작한 뒤에 붙어야 초기 스캔을 버리지 않는다
+    # odom->base_link TF 가 나오기 시작한 뒤에 붙어야 초기 스캔을 버리지 않는다.
+    # 그 TF 를 내는 주체는 구성에 따라 다르다 (기본=드라이버, USE_IMU=1 이면 ekf_node).
     sleep 5
     tmux new-window -t "$SESSION" -n slam -c "$WS" \
       "$ENV_SETUP && ros2 launch relayrobot_description cartographer.launch.py; exec bash"
@@ -157,7 +175,7 @@ else
     tmux new-window -t "$SESSION" -n mpc -c "$WS" \
       "$ENV_SETUP && ros2 run mpc_tubempc_bridge mpc_tubempc_bridge --ros-args \
          -p use_goal_topic:=true -p use_global_path:=true \
-         -p velocity_limit:=0.1 -p horizon:=4; exec bash"
+         -p velocity_limit:=0.1 -p omega_limit:=0.5 -p horizon:=4; exec bash"
     ok "planner / mpc 창 생성"
     warn "★★ 자율주행 모드입니다. /mpc_goal 을 발행하면 로봇이 스스로 출발합니다."
     warn "    비상정지 — MPC 노드를 죽여야 합니다. 이 모드에서는 MPC 가 10Hz 로 /cmd_vel 을"

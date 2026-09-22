@@ -5,14 +5,26 @@
 ## 트리 구조
 
 ```
-map ──[cartographer_node]──► odom ──[ekf_filter_node]──► base_link ──[robot_state_publisher]──► lidar_v1_1
+map ──[cartographer_node]──► odom ──[드라이버 또는 ekf_filter_node]──► base_link
+                                      └─[robot_state_publisher]──► lidar_v1_1
 ```
 
 | 변환 | 발행자 | 의미 | 성질 |
 |------|--------|------|------|
 | `map → odom` | `cartographer_node` | SLAM 이 계산한 **누적 드리프트 보정분** | 불연속(점프). loop closure 때 확 바뀜 |
-| `odom → base_link` | `ekf_filter_node` | 바퀴+IMU 융합 추측항법 | 연속·매끄러움. 단 드리프트 누적 |
+| `odom → base_link` | **구성에 따라 다름** (아래) | 추측항법 | 연속·매끄러움. 단 드리프트 누적 |
 | `base_link → lidar_v1_1` | `robot_state_publisher` | URDF 고정 장착 위치 | 상수 |
+
+**`odom → base_link` 를 누가 내는가는 `use_imu` 가 정한다 (2026-09-22):**
+
+| 구성 | 발행자 | 내용 |
+|---|---|---|
+| **기본 (`use_imu:=false`)** | `real_robot_driver_260519` | 바퀴 인코더 적분만 |
+| `use_imu:=true` | `ekf_filter_node` | 바퀴 + IMU 융합 |
+
+IMU 가 없어도 되는 이유: 2D SLAM 에서 yaw 를 실제로 잡는 주체는 IMU 가 아니라
+**라이다 scan matching** 이다. 바퀴 yaw 는 스캔 사이를 메우는 초기 추정값일 뿐이고,
+드리프트는 `map → odom` 이 흡수한다.
 
 **두 프레임의 역할이 다르다:**
 - `odom` — **매끄럽지만 틀린다.** 점프가 없어 제어 미분에 안전. 시간이 지나면 진짜 위치에서 멀어짐.
@@ -67,9 +79,28 @@ ssh robot 'date -u +%s.%N'; date -u +%s.%N     # 차이 1초 이내
 
 ## ⚠️ `odom → base_link` 를 두 곳에서 발행하지 말 것
 
-`ekf_filter_node` 가 이미 발행한다. `real_robot_driver_260519.py` 의 TF 브로드캐스터는
-그래서 **비활성화돼 있다.** 두 발행자가 경쟁하면 RViz 에서 로봇이 떨린다.
+두 발행자가 경쟁하면 RViz 에서 로봇이 떨리고, 원인 추적이 매우 어렵다.
 자세한 사고 기록은 [[Debugging_Experience]] 1번.
+
+**2026-09-22 부터 이 책임은 `publish_tf` 파라미터가 정한다.** launch 의 `use_imu` 가
+드라이버와 `ekf_node` 중 정확히 하나만 켜지도록 짝지어 놓았다.
+
+| | 드라이버 `publish_tf` | `ekf_node` |
+|---|---|---|
+| `use_imu:=false` (기본) | **True** | 안 띄움 |
+| `use_imu:=true` | False | 띄움 (`publish_tf: true`) |
+
+실수하기 쉬운 두 경로:
+- `ros2 run relayrobot_driver main_driver` (= `motor_node_1.py`) — `odom` 과 TF 를
+  **직접** 쏜다. 띄우지 말 것. 기구학 상수도 낡았다 (`r=0.05`, `base=0.165`).
+- `hw_test` GUI 의 **EKF Start 버튼** — 기본 구성에서 누르면 드라이버와 겹친다.
+  그래서 `use_ekf=False` 일 때는 막아뒀다.
+
+확인:
+```bash
+ros2 topic info /tf --verbose     # odom→base_link 발행 노드가 하나인지
+ros2 run tf2_tools view_frames
+```
 
 ## 🔗 관련 문서
 - [[System_Architecture]]

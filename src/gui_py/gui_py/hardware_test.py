@@ -5,7 +5,17 @@ hardware_test.py - 모터 + IMU + LiDAR 통합 하드웨어 테스트 GUI (ROS2 
 gui_control.py(스탠드얼론 직접 제어)와 같은 다크 테마/구조를 따르되,
 이 프로젝트는 ROS2 기반이므로 모든 통신을 토픽으로 처리한다.
 
-  - 모터  : /cmd_vel 발행 (방향 버튼 + 속도 슬라이더) + /odom_raw 구독해 실측 v/ω 표시
+  - 모터  : /cmd_vel 발행 (방향 버튼 + 속도 슬라이더) + odom 구독해 실측 v/ω 표시
+
+[2026-09-22 — IMU/EKF 는 선택이 되었다]
+  기본(use_ekf=False)  드라이버가 /odom 과 odom->base_link TF 를 직접 낸다. EKF 불필요.
+  use_ekf:=true        드라이버는 /odom_raw 만 내고, EKF 가 /odom 과 TF 를 낸다.
+
+  ★ 이 GUI 로 EKF 를 띄울 때 주의: odom->base_link TF 발행자는 하나뿐이어야 한다.
+    기본 구성에서 EKF 를 추가로 띄우면 드라이버와 EKF 가 같은 TF 를 동시에 쏴서
+    TF 가 두 값 사이에서 튄다. 그래서 use_ekf=False 면 EKF Start 를 막아둔다.
+
+    ros2 run gui_py hw_test --ros-args -p use_ekf:=true
   - IMU   : /ebimu_data 구독 → roll/pitch/yaw, 각속도, 수신 Hz
   - LiDAR : /scan 구독 → 수신 Hz, 포인트 수, 최소거리, 정면거리
 
@@ -69,7 +79,19 @@ class ProcessLauncher:
         return True, f'{self.name} stopped'
 
 # ── 드라이버 노드 실행 커맨드 (README STAGE 1~3과 동일) ───────────────────
-MOTOR_CMD = ['ros2', 'run', 'relayrobot_description', 'real_robot_driver_260519']
+# [2026-09-22 이전]
+#   MOTOR_CMD = ['ros2', 'run', 'relayrobot_description', 'real_robot_driver_260519']
+#   인자가 없었다. 드라이버 기본값이 /odom_raw + TF 미발행이던 시절의 코드다.
+def _motor_cmd(use_ekf: bool):
+    """드라이버 실행 커맨드. use_ekf 가 TF 발행 책임을 결정한다."""
+    cmd = ['ros2', 'run', 'relayrobot_description', 'real_robot_driver_260519']
+    if use_ekf:
+        # EKF 가 /odom 과 TF 를 내므로 드라이버는 원본만 내고 TF 는 양보한다
+        cmd += ['--ros-args', '-p', 'odom_topic:=odom_raw', '-p', 'publish_tf:=false']
+    else:
+        # 드라이버가 /odom 과 TF 를 모두 책임진다 (드라이버 기본값과 동일)
+        cmd += ['--ros-args', '-p', 'odom_topic:=odom', '-p', 'publish_tf:=true']
+    return cmd
 IMU_CMD   = ['ros2', 'run', 'ebimu_pkg', 'ebimu_publisher',
              '--ros-args', '-p', 'port:=/dev/ttyimu', '-p', 'frame_id:=base_link']
 LIDAR_CMD = ['ros2', 'run', 'sllidar_ros2', 'sllidar_node',
@@ -81,6 +103,10 @@ LIDAR_CMD = ['ros2', 'run', 'sllidar_ros2', 'sllidar_node',
 
 # EKF(robot_localization): /odom_raw + /ebimu_data 융합 → /odom 발행.
 # (런치 파일과 동일하게 odometry/filtered 를 odom 으로 리맵)
+#
+# ★ ekf.yaml 은 yaw 소스가 IMU 단독이다. IMU 없이 띄우면 에러 없이 조용히
+#   /odom 의 yaw 가 0 에 고정된다. 반드시 IMU 와 같이 쓸 것.
+#   또한 publish_tf: true 이므로 드라이버의 publish_tf 와 동시에 켜면 안 된다.
 def _ekf_cmd():
     try:
         from ament_index_python.packages import get_package_share_directory
@@ -123,14 +149,24 @@ class HardwareTestNode(Node):
     """
 
     def __init__(self):
-        super().__init__('hardware_test_gui') # 이건 노드이름 
+        super().__init__('hardware_test_gui')
+
+        # IMU + EKF 구성을 쓸 것인지. 기본은 False (IMU 없는 구성).
+        self.declare_parameter('use_ekf', False)
+        self.use_ekf = self.get_parameter('use_ekf').value
+
+        # 드라이버 원본 오도메트리의 토픽 이름은 구성에 따라 다르다.
+        #   use_ekf=False → 드라이버가 /odom 을 직접 낸다
+        #   use_ekf=True  → 드라이버는 /odom_raw, EKF 가 /odom
+        self.odom_raw_topic = '/odom_raw' if self.use_ekf else '/odom'
+ # 이건 노드이름 
 
         # ── 최신 센서 값 캐시 ────────────────────────────────────────────
-        self.odom = {'v': 0.0, 'w': 0.0}                       # /odom_raw 실측 속도
+        self.odom = {'v': 0.0, 'w': 0.0}                       # 드라이버 원본 실측 속도
         self.imu  = {'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,    # /ebimu_data
                      'gyro_z': 0.0, 'acc_x': 0.0, 'acc_y': 0.0}
         self.scan = {'count': 0, 'min': 0.0, 'front': 0.0}     # /scan 요약
-        self.odomf = {'x': 0.0, 'y': 0.0, 'yaw': 0.0,          # /odom (EKF 융합)
+        self.odomf = {'x': 0.0, 'y': 0.0, 'yaw': 0.0,          # /odom (위치 추정)
                       'v': 0.0, 'w': 0.0}
 
         # ── 토픽별 수신 카운터/시각 (Hz 계산 및 생사 판정용) ─────────────
@@ -140,14 +176,19 @@ class HardwareTestNode(Node):
 
         # ── ROS 인터페이스 ──────────────────────────────────────────────
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.create_subscription(Odometry, '/odom_raw', self._odom_cb, 10)
+        # [2026-09-22 이전] 이 줄이 '/odom_raw' 로 고정이었다. IMU 없는 구성에서는
+        #   그 토픽이 아예 발행되지 않으므로 모터 패널이 영영 '— Hz' 로 남는다.
+        #       self.create_subscription(Odometry, '/odom_raw', self._odom_cb, 10)
+        self.create_subscription(Odometry, self.odom_raw_topic, self._odom_cb, 10)
         self.create_subscription(Imu, '/ebimu_data', self._imu_cb, 10)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, 10)
+        # /odom 은 구성과 무관하게 "지금 믿을 수 있는 위치 추정" 이다.
+        # use_ekf=False 면 위 구독과 같은 토픽이 된다 (같은 토픽 이중 구독은 무해).
         self.create_subscription(Odometry, '/odom', self._odomf_cb, 10)
 
         # ── 드라이버 노드 런처 ──────────────────────────────────────────
         self.launchers = {
-            'motor': ProcessLauncher(MOTOR_CMD, 'Motor'),
+            'motor': ProcessLauncher(_motor_cmd(self.use_ekf), 'Motor'),
             'imu':   ProcessLauncher(IMU_CMD, 'IMU'),
             'lidar': ProcessLauncher(LIDAR_CMD, 'LiDAR'),
             'ekf':   ProcessLauncher(_ekf_cmd(), 'EKF'),
@@ -240,8 +281,12 @@ class HardwareTestNode(Node):
         drv.pack(fill='x', padx=10, pady=8)
 
         self.dots = {}  # 토픽 생사 표시 ● 레이블
-        for key, label in [('motor', 'Motor'), ('imu', 'IMU'),
-                           ('lidar', 'LiDAR'), ('ekf', 'EKF')]:
+        # use_ekf=False 면 IMU/EKF 를 쓰지 않는 구성이다. 버튼은 남겨두되
+        # 라벨로 상태를 드러낸다 (Start 는 _start() 에서 막는다).
+        _ekf_label = 'EKF' if self.use_ekf else 'EKF(off)'
+        _imu_label = 'IMU' if self.use_ekf else 'IMU(opt)'
+        for key, label in [('motor', 'Motor'), ('imu', _imu_label),
+                           ('lidar', 'LiDAR'), ('ekf', _ekf_label)]:
             row = tk.Frame(drv, bg=S['surface'])
             row.pack(fill='x', pady=2)
 
@@ -250,7 +295,7 @@ class HardwareTestNode(Node):
             dot.pack(side='left')
             self.dots[key] = dot
 
-            tk.Label(row, text=label, width=7, anchor='w', font=S['font_b'],
+            tk.Label(row, text=label, width=9, anchor='w', font=S['font_b'],
                      bg=S['surface'], fg=S['accent']).pack(side='left')
 
             tk.Button(row, text='Start', font=S['font'], width=7,
@@ -261,7 +306,7 @@ class HardwareTestNode(Node):
                       command=lambda k=key: self._stop(k)).pack(side='left', padx=3)
 
         # ── 모터 제어 ────────────────────────────────────────────────────
-        mot = tk.LabelFrame(r, text=' 모터  (/cmd_vel → /odom_raw) ', font=S['font_b'],
+        mot = tk.LabelFrame(r, text=f' 모터  (/cmd_vel → {self.odom_raw_topic}) ', font=S['font_b'],
                            bg=S['surface'], fg=S['fg'], padx=10, pady=8)
         mot.pack(fill='x', padx=10, pady=8)
 
@@ -327,16 +372,22 @@ class HardwareTestNode(Node):
         self.lbl_lidar.pack(anchor='w')
 
         # ── Odometry (EKF 융합 /odom) ─────────────────────────────────────
-        # 휠 오도메트리(/odom_raw) + IMU yaw 를 EKF 가 융합한 최종 위치 추정.
         # SSH 원격 제어 시 로봇이 어디 있는지 확인하는 핵심 값.
-        odo = tk.LabelFrame(r, text=' Odometry  (/odom · EKF 융합) ', font=S['font_b'],
+        #   use_ekf=False → 드라이버의 바퀴 오도메트리 그대로 (드리프트 누적됨).
+        #                   절대 위치는 SLAM 의 map->base_link TF 를 봐야 한다.
+        #   use_ekf=True  → 휠 오도메트리 + IMU yaw 를 EKF 가 융합한 값.
+        odo_title = (' Odometry  (/odom · EKF 융합) ' if self.use_ekf
+                     else ' Odometry  (/odom · 바퀴 적분) ')
+        odo = tk.LabelFrame(r, text=odo_title, font=S['font_b'],
                            bg=S['surface'], fg=S['fg'], padx=10, pady=8)
         odo.pack(fill='x', padx=10, pady=8)
         self.lbl_odom = tk.Label(odo, justify='left', anchor='w', font=S['font_b'],
                                  bg=S['surface'], fg=S['green'],
                                  text='pos  x=—  y=—   yaw=—\nvel  v=—  ω=—   (— Hz)')
         self.lbl_odom.pack(anchor='w')
-        tk.Label(odo, text='※ EKF Start 필요 (Motor+IMU 먼저 실행)', font=S['font'],
+        odo_hint = ('※ EKF Start 필요 (Motor+IMU 먼저 실행)' if self.use_ekf else
+                    '※ 바퀴 적분값이라 드리프트가 쌓인다. 절대 위치는 SLAM(map→base_link) 기준')
+        tk.Label(odo, text=odo_hint, font=S['font'],
                  bg=S['surface'], fg=S['fg']).pack(anchor='w')
 
         # ── 하단 상태바 ──────────────────────────────────────────────────
@@ -346,6 +397,15 @@ class HardwareTestNode(Node):
 
     # ── 드라이버 Start/Stop ──────────────────────────────────────────────
     def _start(self, key: str):
+        # EKF 는 use_ekf=True 일 때만 띄울 수 있다. 기본 구성에서 띄우면
+        # 드라이버와 EKF 가 odom->base_link TF 를 동시에 발행해 TF 가 튄다.
+        # 게다가 IMU 가 없으면 /odom 의 yaw 가 조용히 0 에 고정된다.
+        if key == 'ekf' and not self.use_ekf:
+            self._set_status(
+                'EKF 사용 안 함 (use_ekf=False). 지금은 드라이버가 /odom 과 TF 를 직접 냅니다. '
+                'EKF 를 쓰려면 GUI 를 -p use_ekf:=true 로 다시 실행하세요.')
+            return
+
         ok, msg = self.launchers[key].start()
         # IMU는 시작 직후 바이어스(편차) 제거용 초기 캘리브레이션을 한다.
         # 그동안은 데이터가 발행되지 않으므로 ● 가 초록이 될 때까지 로봇을 정지시킨다.

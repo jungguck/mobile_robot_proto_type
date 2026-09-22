@@ -16,10 +16,24 @@ class RealRobotDriver260519(Node):
     역할: 모터 시리얼 통신 + 바퀴 오도메트리 계산
 
     발행 토픽:
-      /odom_raw    → EKF가 구독해서 IMU와 융합 → /odom 생성
+      <odom_topic>  → 바퀴 인코더 오도메트리 (기본 /odom)
+      TF odom→base_link → publish_tf=True 일 때만
       /joint_states → robot_state_publisher가 구독해서 RViz 바퀴 시각화
     구독 토픽:
       /cmd_vel     → MPC 또는 teleop에서 속도 명령 수신
+
+    [2026-09-22] IMU 는 선택이 되었다. 구성은 launch 의 use_imu 가 고른다:
+
+      IMU 없음 (기본)  odom_topic=odom,     publish_tf=True
+                       → 이 노드가 /odom 과 TF 를 직접 낸다. EKF 불필요.
+                         yaw 드리프트는 cartographer 의 scan matching 이
+                         map→odom 으로 흡수한다.
+
+      IMU 사용         odom_topic=odom_raw, publish_tf=False
+                       → EKF 가 /odom_raw + IMU 를 융합해 /odom 과 TF 를 낸다.
+
+    ★ odom→base_link TF 발행자는 시스템에 하나뿐이어야 한다. 둘이 동시에 쏘면
+      TF 가 두 값 사이에서 튀고 원인 추적이 매우 어렵다.
     """
 
     def __init__(self):
@@ -38,12 +52,19 @@ class RealRobotDriver260519(Node):
         # 피드백이 이만큼 끊기면 current_rpm_* 는 유령값으로 보고 속도 0 으로 취급한다.
         self.declare_parameter('feedback_timeout', 0.3)
 
+        # [2026-09-22] IMU/EKF 를 안 쓰는 구성에서는 이 노드가 odom 토픽과 TF 를
+        # 모두 책임진다. EKF 를 붙일 때는 launch 가 use_imu:=true 로 뒤집는다.
+        self.declare_parameter('odom_topic', 'odom')
+        self.declare_parameter('publish_tf', True)
+
         port              = self.get_parameter('port').value
         self.wheel_radius = self.get_parameter('wheel_radius').value
         self.wheel_base   = self.get_parameter('wheel_base').value
         self.rpm_scale    = self.get_parameter('rpm_scale').value
         self.cmd_timeout      = float(self.get_parameter('cmd_timeout').value)
         self.feedback_timeout = float(self.get_parameter('feedback_timeout').value)
+        self.odom_topic       = self.get_parameter('odom_topic').value
+        self.publish_tf       = self.get_parameter('publish_tf').value
 
         try:
             # 명령/오도메트리가 같은 기구학 상수를 쓰도록 드라이버에 그대로 주입
@@ -80,10 +101,15 @@ class RealRobotDriver260519(Node):
         self.last_cmd_time = None    # None = 아직 한 번도 안 받음
         self.cmd_timed_out = False   # 두절 경고를 한 번만 찍기 위한 래치
 
-        # /odom_raw: 순수 바퀴 인코더 odom. EKF가 이걸 받아 IMU와 융합 → /odom 출력
-        # /odom을 직접 발행하지 않는 이유: EKF 출력과 토픽 이름 충돌 방지
-        self.odom_pub  = self.create_publisher(Odometry,   'odom_raw',     10)
-        self.joint_pub = self.create_publisher(JointState,  '/joint_states', 10)
+        # [2026-09-22 이전] 토픽 이름이 'odom_raw' 고정이었다. EKF 가 /odom 을
+        #   내던 시절의 코드다.
+        #       self.odom_pub = self.create_publisher(Odometry, 'odom_raw', 10)
+        # 순수 바퀴 인코더 odom. 이름은 구성에 따라 바뀐다 (odom / odom_raw).
+        self.odom_pub  = self.create_publisher(Odometry,   self.odom_topic, 10)
+        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
+
+        # TF 발행자는 시스템에 하나뿐이어야 한다. EKF 를 쓰면 여기서 만들지 않는다.
+        self.tf_broadcaster = TransformBroadcaster(self) if self.publish_tf else None
 
         self.subscription = self.create_subscription(
             Twist, 'cmd_vel', self.cmd_vel_callback, 10
@@ -91,7 +117,10 @@ class RealRobotDriver260519(Node):
 
         # 10Hz: 시리얼 레이턴시(10ms)와 맞춘 주기
         self.timer = self.create_timer(0.1, self.timer_callback)
-        self.get_logger().info("Real Robot Driver Started (Wheel Odom Only)...")
+        self.get_logger().info(
+            f"Real Robot Driver Started (Wheel Odom Only) — "
+            f"odom_topic=/{self.odom_topic}, publish_tf={self.publish_tf}"
+        )
 
     def cmd_vel_callback(self, msg):
         # 저장만 한다. 송신은 timer_callback 이 10Hz 로 재전송한다.
@@ -185,13 +214,19 @@ class RealRobotDriver260519(Node):
         self.x     += v * math.cos(self.theta) * dt
         self.y     += v * math.sin(self.theta) * dt
 
-        self.publish_odom(v, w_enc)
+        self.publish_odom(v, w_enc, current_time)
 
-    def publish_odom(self, v, w):
+    def publish_odom(self, v, w, current_time):
         q = quaternion_from_euler(0, 0, self.theta)
 
         odom = Odometry()
-        odom.header.stamp    = self.get_clock().now().to_msg()
+        # [2026-09-22] 이전에는 여기서 get_clock().now() 를 "다시" 불렀다.
+        #   timer_callback 이 dt 계산에 쓴 current_time 과 다른 값이라, odom 메시지와
+        #   TF 가 서로 다른 시각을 갖게 된다. IMU 없이 scan matching 에만 의존하는
+        #   지금은 cartographer 가 그 차이를 자세 오차로 받아들인다.
+        #   (DEBUG_LOG_2026-09-03 3절 2번)
+        stamp = current_time.to_msg()
+        odom.header.stamp    = stamp
         odom.header.frame_id = "odom"       # 기준 좌표계
         odom.child_frame_id  = "base_link"  # 로봇 몸통
 
@@ -205,8 +240,9 @@ class RealRobotDriver260519(Node):
         odom.twist.twist.linear.x  = v
         odom.twist.twist.angular.z = w
 
-        # covariance: EKF에게 "이 데이터를 얼마나 믿어도 되는지" 알려주는 값
-        # 값이 클수록 불확실 → EKF가 이 센서를 덜 믿고 IMU를 더 반영
+        # covariance: 이 오도메트리를 얼마나 믿어도 되는지 알려주는 값.
+        # IMU 없는 구성에서는 cartographer 의 pose extrapolator 가 참고한다.
+        # 값이 클수록 불확실 → scan matching 결과를 더 크게 반영
         odom.pose.covariance = [
             0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.05, 0.0, 0.0, 0.0, 0.0,
@@ -219,7 +255,25 @@ class RealRobotDriver260519(Node):
 
         self.odom_pub.publish(odom)
 
-        # TF(odom→base_link)는 ekf_node가 담당 — 여기서 발행하면 이중 충돌
+        # [2026-09-22 이전] 여기가 주석 한 줄이었다:
+        #     # TF(odom→base_link)는 ekf_node가 담당 — 여기서 발행하면 이중 충돌
+        #   맞는 말이지만, 그래서 IMU 를 빼는 순간 TF 트리가 통째로 끊겼다.
+        #   이제 누가 낼지는 publish_tf 가 정한다. EKF 구성에서는 여전히 None 이다.
+        if self.tf_broadcaster is None:
+            return
+
+        t = TransformStamped()
+        t.header.stamp    = stamp
+        t.header.frame_id = "odom"
+        t.child_frame_id  = "base_link"
+        t.transform.translation.x = self.x
+        t.transform.translation.y = self.y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.x = q[0]
+        t.transform.rotation.y = q[1]
+        t.transform.rotation.z = q[2]
+        t.transform.rotation.w = q[3]
+        self.tf_broadcaster.sendTransform(t)
 
     def stop_robot(self):
         if self.driver:

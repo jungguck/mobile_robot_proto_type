@@ -1,7 +1,12 @@
 # Relay Robot: ROS2 MPC + SLAM 자율주행
 
-DDSM400 모터 + EBIMU9DOFV5 IMU + RPLidar 기반 차동 구동 모바일 로봇.  
+DDSM400 모터 + RPLidar(S2 계열) 기반 차동 구동 모바일 로봇.  
 Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어기로 목표 좌표 자율 주행.
+
+> **IMU 는 선택 사항이다 (2026-09-22 기준 기본값: 끔).** 2D SLAM 은 라이다 scan matching 이
+> yaw 를 잡아주므로 IMU/EKF 없이 돈다. 바퀴 오도메트리의 드리프트는 cartographer 가
+> `map → odom` TF 로 흡수한다. IMU + EKF 구성으로 되돌리려면 `use_imu:=true`.
+> 자세한 근거는 `docs/DEBUG_LOG_2026-09-22.md`.
 
 ---
 
@@ -46,38 +51,52 @@ src/
 /dev/ttyACM0  ──►  real_robot_driver_260519  ──►  /odom_raw  (nav_msgs/Odometry)
                                              ──►  /joint_states
                    sub: /cmd_vel ◄───────────────────────────
-/dev/ttyimu   ──►  ebimu_publisher           ──►  /ebimu_data (sensor_msgs/Imu)
 /dev/rplidar  ──►  sllidar_node              ──►  /scan      (sensor_msgs/LaserScan)
 
-[센서 융합]
-/odom_raw ──┐
-            ├──►  ekf_filter_node  ──►  /odom (nav_msgs/Odometry)
-/ebimu_data ┘                      ──►  TF: odom → base_link
+  ※ 위 /odom_raw 는 use_imu:=true 일 때의 토픽 이름이다.
+    기본(IMU 없음)에서는 드라이버가 /odom 과 TF 를 직접 낸다 ↓
+
+[오도메트리]  — 기본: IMU 없음
+real_robot_driver_260519  ──►  /odom (nav_msgs/Odometry)
+                          ──►  TF: odom → base_link
+
+[오도메트리]  — use_imu:=true 일 때만
+/dev/ttyimu ──► ebimu_publisher ──► /ebimu_data ──┐
+                                                  ├──► ekf_filter_node ──► /odom
+                         real_robot_driver ──► /odom_raw ──┘            ──► TF: odom → base_link
 
 [SLAM]
 /scan + TF(odom→base_link)  ──►  cartographer_node  ──►  /map (OccupancyGrid)
                                                      ──►  TF: map → odom
+                                                          (= 누적 드리프트 보정분)
 
 [경로 계획]
-/map + /odom + /mpc_goal  ──►  path_planner (A*)  ──►  /global_path (nav_msgs/Path)
+/map + TF(map→base_link) + /mpc_goal  ──►  path_planner (A*)  ──►  /global_path
 
 [MPC 제어]
-/odom + /global_path  ──►  bridge_node (TubeMPC)  ──►  /cmd_vel (geometry_msgs/Twist)
+TF(map→base_link) + /global_path  ──►  bridge_node (TubeMPC)  ──►  /cmd_vel
                            (내부 의존: ddsm_example/mpc_tubempc/TubeMPCPlanner.py)
 
+  ※ 제어·계획은 /odom 이 아니라 map→base_link TF 를 쓴다. /odom 은 odom 프레임이고
+    목표·경로는 map 프레임이라 서로 원점이 다르다. 차이가 곧 SLAM 보정분이다.
+    (src/mpc_tubempc_bridge/.../pose_source.py)
+
 [TF 트리 전체]
-map ──[cartographer]──► odom ──[ekf_node]──► base_link ──[robot_state_publisher]──► lidar_v1_1
-                                                                                 ──► left_wheel_v1_1
-                                                                                 ──► right_wheel_v1_1
+map ──[cartographer]──► odom ──[드라이버 또는 ekf_node]──► base_link
+                                                            └─[robot_state_publisher]──► lidar_v1_1
+                                                                                      ──► left_wheel_v1_1
+                                                                                      ──► right_wheel_v1_1
+  ★ odom→base_link 발행자는 **반드시 하나**여야 한다. use_imu 가 그걸 결정한다.
 ```
 
 ### 주요 ROS2 토픽 정리
 
 | 토픽 | 타입 | 발행 노드 |
 |------|------|-----------|
-| `/odom_raw` | `nav_msgs/Odometry` | real_robot_driver_260519 |
-| `/odom` | `nav_msgs/Odometry` | ekf_filter_node (remapped) |
-| `/ebimu_data` | `sensor_msgs/Imu` | ebimu_publisher |
+| `/odom` | `nav_msgs/Odometry` | real_robot_driver_260519 (기본) |
+| `/odom_raw` | `nav_msgs/Odometry` | real_robot_driver_260519 (`use_imu:=true` 일 때) |
+| `/odom` | `nav_msgs/Odometry` | ekf_filter_node (`use_imu:=true` 일 때, remapped) |
+| `/ebimu_data` | `sensor_msgs/Imu` | ebimu_publisher (`use_imu:=true` 일 때) |
 | `/scan` | `sensor_msgs/LaserScan` | sllidar_node |
 | `/map` | `nav_msgs/OccupancyGrid` | cartographer_node |
 | `/mpc_goal` | `geometry_msgs/PoseStamped` | 외부 입력 (ros2 topic pub / GUI) |
@@ -247,37 +266,51 @@ rviz2
 
 ---
 
-### STAGE 4: Odometry (EKF 융합) 테스트
+### STAGE 4: Odometry 테스트 (IMU 없음 — 기본)
 
-**목표:** 바퀴 오도메트리 + IMU → EKF 융합 → /odom 발행, TF 트리 완성
+**목표:** 바퀴 오도메트리 → /odom 발행 + odom→base_link TF, TF 트리 완성
 
-**선행 조건:** STAGE 1, 2, 3 통과
+**선행 조건:** STAGE 1, 3 통과 (STAGE 2 = IMU 는 건너뛰어도 된다)
 
 ```bash
 # [터미널 1] 전체 하드웨어 launch (이 터미널을 이후 단계에서도 유지)
 ros2 launch relayrobot_description real_robot_260519.launch.py
 
 # [터미널 2] 확인
-ros2 topic list          # /odom, /odom_raw, /ebimu_data, /scan 모두 보여야 함
-ros2 topic hz /odom      # 목표: ~30 Hz
-ros2 run tf2_ros tf2_echo odom base_link   # TF 출력되면 EKF 정상
+ros2 topic list          # /odom, /joint_states, /scan 이 보여야 함 (/ebimu_data 는 없다)
+ros2 topic hz /odom      # 목표: 10 Hz  ← 드라이버 타이머가 10Hz 다. EKF 의 30Hz 가 아니다
+ros2 run tf2_ros tf2_echo odom base_link   # TF 출력되면 드라이버 정상
 
 # [터미널 3] 직진 1m 후 위치 확인
 ros2 topic echo /odom --field pose.pose.position
 ```
 
 **성공 기준:**
-- `/odom` 30 Hz 발행
-- `tf2_echo odom base_link`에서 transform 출력됨
+- `/odom` **10 Hz** 발행
+- `tf2_echo odom base_link` 에서 transform 출력됨
 - 1m 직진 시 `position.x ≈ 0.9~1.1`
 
 **실패 체크리스트:**
 ```
-[ ] robot_localization 설치: ros2 pkg list | grep robot_localization
-[ ] EKF 로그 확인: "ekf_filter_node" 오류 메시지
-[ ] /odom_raw 발행 확인 (STAGE 1 선행)
-[ ] ekf.yaml 경로: 
-    ls $(ros2 pkg prefix relayrobot_description)/share/relayrobot_description/config/ekf.yaml
+[ ] /odom 이 아예 없다        → 드라이버 로그의 "odom_topic=/..., publish_tf=..." 줄 확인.
+                                odom_raw 로 떠 있으면 use_imu 가 true 로 넘어간 것이다.
+[ ] TF 가 없다                → 같은 로그의 publish_tf=False 면 드라이버가 TF 를 안 낸다
+[ ] TF 값이 튄다              → odom→base_link 발행자가 둘일 때의 증상.
+                                ros2 run tf2_tools view_frames 로 확인.
+                                ros2 run relayrobot_driver main_driver 를 따로 띄우지 말 것
+```
+
+**IMU + EKF 구성으로 확인하려면** (`use_imu:=true`):
+```bash
+ros2 launch relayrobot_description real_robot_260519.launch.py use_imu:=true
+ros2 topic hz /odom        # 이때는 EKF 가 내므로 ~30 Hz
+ros2 topic hz /odom_raw    # 드라이버 원본, 10 Hz
+```
+이 경우 STAGE 2(IMU 단독 테스트)를 먼저 통과해야 한다. `robot_localization` 설치와
+`ekf.yaml` 설치 경로도 확인할 것:
+```
+ros2 pkg list | grep robot_localization
+ls $(ros2 pkg prefix relayrobot_description)/share/relayrobot_description/config/ekf.yaml
 ```
 
 ---

@@ -38,4 +38,12 @@ TRAJECTORY_BUILDER_2D.missing_data_ray_length = 8.5
 TRAJECTORY_BUILDER_2D.use_imu_data = false  -- 2D SLAM에서는 IMU 없어도 됨
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 
+-- IMU 가 없으므로 자세의 초기 추정값이 "바퀴 오도메트리 yaw" 하나뿐이다.
+-- 그런데 diff drive 는 회전할 때 바퀴가 옆으로 긁혀서 그 yaw 가 잘 틀어진다.
+-- rotation_weight 는 "스캔 정합 결과가 초기 추정 각도에서 벗어나는 것"에 대한
+-- 벌점이다. 기본 40 은 초기 추정을 꽤 믿는 값이라, 바퀴 yaw 가 튀면
+-- 스캔이 맞다고 말해도 잘 안 따라간다. 낮춰서 스캔 쪽 손을 들어준다.
+-- (되돌리려면 40. 으로. 반대로 스캔이 헛도는 환경이면 다시 올릴 것)
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 20.
+
 return options

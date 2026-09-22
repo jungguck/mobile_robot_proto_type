@@ -204,3 +204,39 @@
       **10번(stale 피드백)을 "미해결" → "해결(2026-09-13)"** 로 정정
     - 남은 고아 링크: `ROS2_Packages` (index 에 미작성으로 명시)
 - **상세**: `docs/DEBUG_LOG_2026-09-13.md` 11~18절
+
+## [2026-09-22] Change | IMU 를 선택 사항으로 — `use_imu` 스위치 + 구독자 전수 정리
+- **내용**: 2D SLAM 의 yaw 주체는 IMU 가 아니라 라이다 scan matching 이라는 전제로 구성을
+  재정립. IMU 를 선택으로 내리고 기본값을 끔으로 바꿨다.
+- **확정**:
+    - **`use_imu` 런치 인자 하나가 구성을 결정한다. 기본 `false`.** (`robot-up.sh` 는 `USE_IMU=1`)
+    - **`odom -> base_link` TF 발행자는 하나뿐이어야 한다.** `use_imu` 가 그 책임을
+      드라이버(`publish_tf=True`)와 `ekf_node` 사이에서 옮긴다.
+    - `ekf_node` 를 IMU 없이 띄우면 안 된다 — `ekf.yaml` 은 yaw 소스가 IMU 단독이라
+      `/odom` 의 yaw 가 **조용히 0 에 고정**된다.
+    - 매핑 운용: 각속도 **<= 0.5 rad/s**, 선속도 **<= 0.3 m/s**, 제자리 회전 회피.
+      S2 가 10Hz 라 IMU 없이는 스캔 내 de-skew 가 불가능하다는 물리적 제약.
+      **teleop 기본값(turn=1.0)이 그 2배라 따로 낮춰야 한다.**
+- **⚠️ 프로세스 사고 — 저장소 시차, 이번엔 반대 방향**: 로컬 `main` 이 09-06 에 멈춰 있었고
+  `git status` 는 clean 이었다. 그 상태로 하루치를 작업한 뒤 push 가 거부됐다.
+  원격엔 09-07/09-13 커밋 3개가 있었고, **09-13 이 이미 해둔 것과 상당 부분이 겹쳤다**
+  (tf2 map 프레임 일원화, `/cmd_vel` watchdog). 겹친 작업은 전부 버렸다.
+    - → **규칙: 작업 시작 전 `git fetch && git log HEAD..origin/main`.**
+      `git status` 가 clean 한 것은 **로컬이 최신이라는 뜻이 아니다.**
+    - 복구는 merge 가 아니라 `git branch <백업> && git reset --hard origin/main` 후 재적용.
+      충돌 해소 방향이 "내 것 전부 버리기" 라 merge 는 시간 낭비였다.
+- **작업**:
+    - `docs/DEBUG_LOG_2026-09-22.md` 신규 — IMU 구성의 정본
+    - 드라이버: `odom_topic`/`publish_tf` 파라미터, `TransformBroadcaster` 로 TF 발행
+    - launch: `use_imu` 분기 (드라이버 2벌 / `imu_node` / `ekf_node`)
+    - `my_cartographer.lua`: `ceres_scan_matcher.rotation_weight` 40 -> 20
+    - **발행/구독 전수 조사** — 드라이버 발행 토픽이 바뀌면 구독자가 조용히 굶는다:
+      `odom_calibrate`(기본값 `/odom_raw`), `tools/odom_check.py`(고정 `/odom_raw`),
+      `hardware_test` GUI(모터 패널 + **EKF Start 가 TF 이중 발행**) 세 곳을 고쳤다
+    - [[TF_Coordinate_System]] / [[System_Architecture]] 갱신
+- **종결**: `DEBUG_LOG_2026-09-03.md` 3절 2번 — `odom.header.stamp` 이중 취득
+- **⏳ 미완**: **젯슨 빌드 안 했다 (전원 꺼짐).** `git pull && colcon build --symlink-install`
+  부터 해야 반영된다. USB 장치도 09-13 기준 전부 분리 상태.
+- **검증**: 문법 검사만 (`ast`, `bash -n`). 실기 미검증.
+- **상세**: `docs/DEBUG_LOG_2026-09-22.md`
+

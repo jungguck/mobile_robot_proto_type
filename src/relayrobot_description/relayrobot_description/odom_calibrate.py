@@ -42,7 +42,13 @@ class OdomCalibrate(Node):
         self.declare_parameter('speed', 0.15)        # m/s 또는 rad/s
         self.declare_parameter('duration', 10.0)     # 초
         self.declare_parameter('measured', 0.0)      # 실측값 (m 또는 deg). 0이면 비교 생략
-        self.declare_parameter('odom_topic', '/odom_raw')
+        # [2026-09-22 변경] 기본값 '/odom_raw' -> '/odom'
+        #   이전에는 드라이버가 /odom_raw 를 내고 EKF 가 /odom 을 냈다. 지금은 IMU 없이
+        #   드라이버가 /odom 을 직접 낸다. 기본값을 안 바꾸면 이 노드가 영영 오지 않는
+        #   토픽을 기다리며 조용히 멈춰 있는다.
+        #   USE_IMU=1 / use_imu:=true 로 돌릴 때는 -p odom_topic:=/odom_raw 를 넘길 것.
+        #   (기구학 보정은 EKF 출력이 아니라 드라이버 원본을 봐야 의미가 있다)
+        self.declare_parameter('odom_topic', '/odom')
 
         self.mode     = self.get_parameter('mode').value
         self.speed    = self.get_parameter('speed').value

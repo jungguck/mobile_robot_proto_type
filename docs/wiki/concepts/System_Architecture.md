@@ -6,11 +6,18 @@ Relay Robot 프로젝트는 센서 융합(Sensor Fusion)과 정밀 제어(MPC)�
 
 ### 1. Sensing & Actuation (Hardware)
 - **Actuators**: [[Relay_Robot_Hardware#DDSM400-모터]]
-- **Sensors**: [[Relay_Robot_Hardware#RPLidar]], [[Relay_Robot_Hardware#EB-IMU]]
+- **Sensors**: [[Relay_Robot_Hardware#RPLidar]] (필수),
+  [[Relay_Robot_Hardware#EB-IMU]] (**선택** — 2026-09-22 부터 기본 꺼짐)
 
 ### 2. Localization & Perception (Estimation)
-- **EKF (Extended Kalman Filter)**: `odom_raw`(휠 인코더)와 IMU 데이터를 융합하여 정밀한 `odom` 생성.
-- **SLAM (Cartographer)**: Lidar 데이터를 이용해 지도를 생성하고, `map -> odom` TF를 통해 누적 오차 보정.
+- **Wheel Odometry (기본)**: 드라이버가 인코더를 적분해 `odom` 과 `odom -> base_link` TF 발행.
+  스캔 사이를 메우는 **단기 추정값**이며 절대 정확도를 담당하지 않는다.
+- **SLAM (Cartographer)**: Lidar scan matching 으로 자세를 추정하고 지도를 생성.
+  누적 오차를 `map -> odom` TF 로 흡수한다. **yaw 의 실질적 주체는 여기다.**
+- **EKF (선택)**: `use_imu:=true` 일 때만. `odom_raw`(휠) + IMU 를 융합해 `odom` 과 TF 생성.
+  이때 드라이버는 TF 를 내지 않는다. → [[TF_Coordinate_System]]
+
+> IMU 를 빼도 되는 근거와 그때 지켜야 할 속도 제한은 `docs/DEBUG_LOG_2026-09-22.md`.
 
 ### 3. Navigation & Control
 - **A\* Global Planner** (`path_planner.py`): `/map` 을 **로봇 반경만큼 팽창**시킨 뒤 격자 탐색.
@@ -33,8 +40,9 @@ cross-distro(PC Jazzy ↔ 젯슨 Humble) 통신 근거는 `docs/DEBUG_LOG_2026-0
 접속 방법은 `docs/REMOTE_ACCESS.md`.
 
 ## 🔄 데이터 흐름 (Data Flow)
-1. **Raw Data**: 모터 엔코더가 `odom_raw`를 발행.
-2. **Fusion**: `robot_localization` 패키지의 `ekf_node`가 IMU와 `odom_raw`를 결합하여 `odom`과 `odom -> base_link` TF 발행.
+1. **Odometry**: 드라이버가 인코더를 적분해 `odom` 과 `odom -> base_link` TF 발행.
+   (`use_imu:=true` 면 드라이버는 `odom_raw` 만 내고, `ekf_node` 가 IMU 와 융합해
+   `odom` 과 TF 를 발행한다.)
 3. **Correction**: SLAM 노드가 `scan`과 `odom`을 비교하여 `map -> odom` TF 발행.
 4. **Planning**: `path_planner` 가 `/map` + `/mpc_goal` + **TF** 로 `/global_path` 생성.
 5. **Control**: `bridge_node` 가 `/global_path` + **TF** 로 `/cmd_vel` 생성.
@@ -46,6 +54,18 @@ cross-distro(PC Jazzy ↔ 젯슨 Humble) 통신 근거는 `docs/DEBUG_LOG_2026-0
 ## 📡 원격 관측 토픽
 `/inflated_map` · `/global_path` · `/mpc/reference_path` · `/mpc/tracking_error` · `/mpc/status`
 — PC RViz 프리셋: `src/relayrobot_description/config/nav.rviz`
+
+## ⚠️ 운용 제약 — IMU 가 없을 때
+
+라이다(S2 계열)가 10Hz 이고, IMU 가 없으면 스캔 내 모션 왜곡(de-skew)을 보정할
+수단이 없다. 한 스캔이 도는 100ms 동안 움직인 만큼 포인트가 번진다.
+
+- 각속도 **≤ 0.5 rad/s** (1.0 rad/s 면 한 스캔에 5.7° 가 번진다)
+- 선속도 **≤ 0.3 m/s**
+- 제자리 회전 회피 (diff drive 에서 바퀴 슬립이 가장 심한 동작)
+
+`robot-up.sh nav` 가 MPC 에 `omega_limit:=0.5` 를 넘기는 이유가 이것이다.
+**teleop 은 기본값이 `turn=1.0` 이라 따로 낮춰야 한다** (`-p turn:=0.4`).
 
 ## ⚠️ 안전 원칙
 - **경로가 없으면 선다.** A\* 실패·계획기 사망 시 직선으로 달리지 않는다 (`NO_PATH`).

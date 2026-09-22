@@ -14,6 +14,19 @@ odom_check.py — PC(개발기)에서 젯슨의 오도메트리를 원격 진단
   ②는 IMU 절대 yaw 를 기준으로 삼으므로 줄자 없이도 회전 오차를 잡아낸다.
   (이 IMU 는 자이로를 안 주고 절대 자세만 준다 — ekf.yaml 주석 참고)
 
+[⚠️ 2026-09-22 — IMU 없는 구성에서는 ②를 쓸 수 없다]
+  기본 구성에서 IMU 와 EKF 를 띄우지 않으므로 `/ebimu_data` 와 `/odom_raw` 가 없다.
+  바퀴 오도메트리는 `/odom` 으로 직접 나온다 (그래서 raw_topic 기본값이 /odom 이다).
+
+    ① 선속도 스케일 → 그대로 쓸 수 있다.
+    ② 회전 스케일   → **기준이 될 IMU 가 없다.** 비교 대상이 없으므로 표시되지 않는다.
+                      대신 바닥에 테이프를 붙이고 실측 각도로 재는 쪽을 쓴다:
+                        ros2 run relayrobot_description odom_calibrate --ros-args \
+                          -p mode:=rotate -p speed:=0.4 -p duration:=20.0 -p measured:=1080.0
+
+  예전 구성(IMU + EKF)으로 볼 때는 토픽을 되돌려 준다:
+    python3 tools/odom_check.py --ros-args -p raw_topic:=/odom_raw
+
 [이 노드는 젯슨이 아니라 PC 에서 돈다]
   전부 표준 메시지라 Jazzy(PC) ↔ Humble(젯슨) cross-distro 로 그냥 받아진다.
   젯슨 워크스페이스에 빌드할 필요 없다.
@@ -117,10 +130,21 @@ class OdomCheck(Node):
         self.imu_yaw = 0.0
         self.imu_seen = False
 
+        # [2026-09-22] 바퀴 오도메트리 토픽 이름이 구성에 따라 다르다.
+        #   IMU 없음(기본) → /odom      (드라이버가 직접 발행)
+        #   USE_IMU=1      → /odom_raw  (드라이버 원본, /odom 은 EKF 출력)
+        # [이전] self.create_subscription(Odometry, '/odom_raw', self.on_raw, 10)
+        self.declare_parameter('raw_topic', '/odom')
+        raw_topic = self.get_parameter('raw_topic').value
+
         self.create_subscription(Twist,    '/cmd_vel',    self.on_cmd,  10)
-        self.create_subscription(Odometry, '/odom_raw',   self.on_raw,  10)
+        self.create_subscription(Odometry, raw_topic,     self.on_raw,  10)
         self.create_subscription(Odometry, '/odom',       self.on_ekf,  10)
+        # IMU 가 없는 구성에서는 이 구독으로 아무것도 안 들어온다. 그러면 imu_seen 이
+        # False 로 남아 회전 스케일(②)이 표시되지 않는다 — 의도된 동작이다.
         self.create_subscription(Imu,      '/ebimu_data', self.on_imu,  50)
+
+        self.get_logger().info(f'raw_topic={raw_topic}')
 
         self.create_service(Trigger, '~/reset', self.on_reset)
 
