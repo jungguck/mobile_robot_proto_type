@@ -75,6 +75,10 @@ ros2 launch sllidar_ros2 sllidar_s2_launch.py serial_port:=/dev/rplidar
 ## EB-IMU
 - **모델**: E2BOX EBIMU9DOFV5. 포트 `/dev/ttyimu` (CP2102, 115200).
 - **역할**: EKF 의 방향(yaw) 소스. 바퀴 오도메트리의 회전 오차를 보정.
+- **[2026-09-22] 선택 사항이 됐다.** 2D SLAM 에서 yaw 를 잡는 주체는 라이다
+  scan matching 이므로 IMU 없이 돈다(기본값). `use_imu:=true` 로만 위 역할을 한다.
+  대신 매핑 중 각속도 ≤ 0.5 rad/s 를 지켜야 한다 — IMU 가 없으면 스캔 내 모션
+  왜곡(de-skew)을 보정할 수단이 없다. 근거: `docs/DEBUG_LOG_2026-09-22.md`.
 - **Topic**: `/ebimu_data` (`sensor_msgs/Imu`)
 
 ### 출력 포맷 (2026-08-22 실측)

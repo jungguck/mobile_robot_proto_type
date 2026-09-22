@@ -36,6 +36,8 @@ src/
 │   │   ├── motor_drive_1.py             ★ DDSM 시리얼. 부호(DIR_L/DIR_R)·단위를 흡수
 │   │   ├── odom_calibrate.py              기구학 보정 도구 (직진/회전)
 │   │   └── odom_listener.py               /odom 을 터미널에 찍는 최소 예제
+│   │                                        (2026-09-22 에 relayrobot_driver 의
+│   │                                         odom_sub 와 합쳤다)
 │   ├── launch/
 │   │   ├── real_robot_260519.launch.py  ★ 메인. 모터+LiDAR (+IMU/EKF 는 use_imu:=true)
 │   │   └── cartographer.launch.py       ★ SLAM
@@ -57,7 +59,6 @@ src/
 │                                           프로토콜이 의심되면 문서 말고 이걸 본다
 ├── ebimu_pkg/ebimu_pkg/ebimu_publisher.py  IMU 드라이버. use_imu:=true 일 때만
 ├── gui_py/gui_py/hardware_test.py       ★ 원격 조종 GUI (/cmd_vel 발행). ssh -X 로 띄움
-├── relayrobot_driver/                     odom_sub — odom_listener 와 사실상 중복
 └── sllidar_ros2/                          서드파티. 우리는 sllidar_s2_launch.py 만 씀
 
 scripts/robot-up.sh                      ★ tmux 상시 기동 (sensors|full|slam|nav)
@@ -132,10 +133,25 @@ map ──[cartographer]──► odom ──[드라이버 또는 ekf_node]─�
 
 ## 시스템 요구사항
 
-- OS: Ubuntu 24.04
-- ROS: ROS2 Jazzy
-- Python: 3.10+
+> **2026-09-22 정정. 이 문서는 예전에 Jazzy/Ubuntu 24.04 로만 적혀 있었는데 틀렸다.**
+> 로봇(젯슨)은 **JetPack 6.2.1 = L4T 36.x = Ubuntu 22.04 = ROS 2 Humble** 이다.
+> `ros-jazzy-*` 를 22.04 에 설치하려 하면 패키지를 못 찾는다.
+> 근거: `docs/DEBUG_LOG_2026-09-03.md` 4절, `docs/JETSON_SETUP.md`.
+
+| | 로봇 (젯슨 Orin Nano) | 개발 PC |
+|---|---|---|
+| OS | **Ubuntu 22.04** (JetPack 6.2.1) | Ubuntu 24.04 |
+| ROS | **Humble** | Jazzy |
+| 역할 | 드라이버·SLAM·A* ·MPC — **제어 루프 전부** | RViz·rqt·진단 도구 |
+
+- Python: 3.10+ (젯슨 3.10)
 - 필수 Python 패키지: `numpy scipy cvxpy polytope osqp cvxopt`
+- **numpy 는 2.2.6 이고 내리면 안 된다.** tube MPC 스택이 요구한다. ROS 라이브러리가
+  numpy 2 에서 깨지면 그 라이브러리를 올려서 푼다 (`transforms3d>=0.4.2`).
+  근거: `docs/DEBUG_LOG_2026-09-06.md` 3절.
+
+> PC(Jazzy) ↔ 젯슨(Humble) 은 표준 메시지만 쓰므로 cross-distro 로 토픽이 그대로
+> 오간다 (`ROS_DOMAIN_ID=0`). 근거: `docs/DEBUG_LOG_2026-09-07.md`.
 
 ---
 
@@ -143,22 +159,29 @@ map ──[cartographer]──► odom ──[드라이버 또는 ekf_node]─�
 
 | 장치 | 포트 | 프로토콜 |
 |------|------|----------|
-| DDSM HAT(B) 모터 컨트롤러 | `/dev/ttyACM0` | USB-CDC, 115200 bps, ESP32 JSON 모드 |
-| EBIMU9DOFV5 IMU | `/dev/ttyimu` | UART, 115200 bps |
-| RPLidar | `/dev/rplidar` | UART, 1000000 bps (A3) |
+| DDSM HAT(B) 모터 컨트롤러 | **`/dev/motor`** | USB-CDC, 115200 bps, ESP32 JSON 모드 |
+| EBIMU9DOFV5 IMU (**선택**) | `/dev/ttyimu` | UART, 115200 bps |
+| RPLidar **S2 계열** | `/dev/rplidar` | UART, **1,000,000 bps** |
+
+> **udev 별명(`/dev/motor` 등)이 정본이다.** `/dev/ttyUSB*` 는 꽂는 순서마다 바뀐다.
+> 특히 `/dev/ttyUSB0` 는 **IMU** 라서, 라이다 launch 기본값을 그대로 쓰면 IMU 를 연다.
+>
+> **라이다는 A1/A3 가 아니라 S2 계열이다** (2026-09-06 실측 정정).
+> `sllidar_a1_launch.py` 로는 `SL_RESULT_OPERATION_TIMEOUT` 으로 죽는다.
 
 ---
 
 ## 최초 설치 (1회)
 
 ```bash
-# 1. ROS2 Jazzy 의존 패키지
+# 1. ROS 2 Humble 의존 패키지 (젯슨)
+#    robot-localization 은 use_imu:=true 로 EKF 를 쓸 때만 필요하다.
 sudo apt update
 sudo apt install -y \
-  ros-jazzy-robot-localization \
-  ros-jazzy-cartographer-ros \
-  ros-jazzy-tf-transformations \
-  ros-jazzy-teleop-twist-keyboard
+  ros-humble-cartographer-ros \
+  ros-humble-tf-transformations \
+  ros-humble-teleop-twist-keyboard \
+  ros-humble-robot-localization
 
 # 2. Python 의존 패키지 (polytope는 LP 솔버 cvxopt 필요)
 pip3 install numpy scipy cvxpy polytope osqp cvxopt
@@ -174,11 +197,14 @@ ls -la /dev/rplidar /dev/ttyimu
 # 5. 워크스페이스 빌드 (--symlink-install 필수)
 # bridge_node.py가 소스 경로 기반 TubeMPCPlanner import를 사용하므로 심링크 빌드 필요
 cd ~/mobile_robot_proto_type
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 
 # 6. bashrc 등록
-echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
+# ROS 블록은 .bashrc 맨 "앞"(비대화형 가드보다 위)에 둬야 ssh robot '<명령>'
+# 한 줄 실행에서도 환경이 잡힌다. 단, 아무것도 출력하면 안 된다 — scp 가 깨진다.
+# (docs/DEBUG_LOG_2026-09-06.md 2절)
+echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc
 echo 'source ~/mobile_robot_proto_type/install/setup.bash' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -188,7 +214,10 @@ source ~/.bashrc
 ## 단계별 실행 가이드
 
 > 모든 터미널에서 소싱 필수:  
-> `source /opt/ros/jazzy/setup.bash && source ~/mobile_robot_proto_type/install/setup.bash`
+> `source /opt/ros/humble/setup.bash && source ~/mobile_robot_proto_type/install/setup.bash`
+>
+> 실전에서는 손으로 띄우지 말고 `scripts/robot-up.sh` 를 쓴다 (tmux 안에서 돌아
+> SSH 가 끊겨도 노드가 안 죽는다).
 
 ---
 
@@ -209,16 +238,17 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
   "{linear: {x: 0.0}, angular: {z: 0.0}}" --once
 
 # [터미널 3] 오도메트리 확인
-ros2 topic echo /odom_raw --field twist.twist.linear
+#   기본(IMU 없음)에서는 /odom 이다. use_imu:=true 일 때만 /odom_raw.
+ros2 topic echo /odom --field twist.twist.linear
 ```
 
 **성공 기준:**
-- `/odom_raw`의 `twist.linear.x`가 약 `0.1` (±30%)
+- `/odom`의 `twist.linear.x`가 약 `0.1` (±30%)
 - 로봇이 실제로 전진
 
 **실패 체크리스트:**
 ```
-[ ] ls -la /dev/ttyACM0          → 없으면 USB 재연결
+[ ] ls -la /dev/motor            → 없으면 USB 재연결 / udev 규칙 확인
 [ ] groups | grep dialout        → 없으면 usermod 후 재로그인
 [ ] ESP32 모드 점퍼 확인          → Arduino 모드면 JSON 무응답
 [ ] ros2 run 실행 로그에 "Connected" 출력 확인
@@ -452,13 +482,13 @@ python3 src/relayrobot_driver/relayrobot_driver/motor_test_1.py
 ### EKF /odom 미발행
 ```bash
 ros2 pkg list | grep robot_localization
-# → 없으면: sudo apt install ros-jazzy-robot-localization
+# → 없으면: sudo apt install ros-humble-robot-localization   (use_imu:=true 일 때만 필요)
 ```
 
 ### Cartographer apt 설치 안 될 때
 ```bash
-# Jazzy에서 공식 패키지 없을 경우 slam_toolbox 대체 사용
-sudo apt install ros-jazzy-slam-toolbox
+# cartographer 가 없을 경우 slam_toolbox 대체 사용
+sudo apt install ros-humble-slam-toolbox
 # my_slam_params.yaml의 use_sim_time: false 유지
 ros2 launch slam_toolbox online_async_launch.py \
   params_file:=src/relayrobot_description/my_slam_params.yaml

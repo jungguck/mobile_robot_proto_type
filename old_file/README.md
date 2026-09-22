@@ -47,6 +47,25 @@ DDSM 보드 제조사 예제와, 거기서 갈라져 나온 옛 드라이버 사
 > `bridge_node.py` 가 sys.path 에 `src/ddsm_example/mpc_tubempc` 를 넣고
 > `from TubeMPCPlanner import TubeMPCPlanner` 로 가져온다. 경로가 코드에 박혀 있다.
 
+### `src/relayrobot_driver/` — 패키지 통째로 (2026-09-22)
+
+`odom_sub`(`odom_subscriber.py`)가 `relayrobot_description` 의 `odom_listener` 와
+**완전히 같은 일**을 했다 — 둘 다 `/odom` 을 구독해 x, y, yaw 를 출력. 패키지 하나가
+그 중복 노드 하나 때문에 존재하고 있었다.
+
+`odom_listener` 로 합치면서 이쪽의 장점 두 개를 가져갔다:
+- 출력을 `print` 가 아니라 `get_logger()` 로 (ROS 로그에 남고 시각이 찍힌다)
+- `destroy_node()` 를 `finally` 안으로 (예외로 빠져나갈 때도 정리된다)
+
+`main_driver` 는 2026-09-06 에 이미 엔트리에서 제거된 상태였다.
+
+> 이 패키지의 `package.xml` 이 여기 남아 있지만 **`COLCON_IGNORE` 때문에 빌드되지
+> 않는다.** 워크스페이스 패키지는 6개 → **5개**가 됐다.
+>
+> ⚠️ **젯슨에서는 `install/relayrobot_driver/` 가 남아 있을 수 있다.** 그러면
+> `ros2 run relayrobot_driver odom_sub` 가 낡은 사본으로 계속 돈다.
+> 깔끔하게 하려면 pull 후 `rm -rf build install log` 하고 다시 빌드할 것.
+
 ### 일회성 테스트 노드
 
 | 파일 | 대체재 |
@@ -83,6 +102,6 @@ DDSM 보드 제조사 예제와, 거기서 갈라져 나온 옛 드라이버 사
   우리가 쓰는 것은 `sllidar_s2_launch.py` 하나다 (S2 계열, 1,000,000 보드).
 - **루트의 `.md` 들** (`GEMINI.md`, `FABLE_REASONING.md`, `read_prompt.md`,
   `first_you_need_it.md`) — 로봇 코드가 아니라 **작업 방식/에이전트 지시문**이다.
-- **`src/relayrobot_driver/` 패키지 자체** — `odom_sub` 엔트리가 살아 있어서 남겼다.
-  다만 이것은 `relayrobot_description` 의 `odom_listener` 와 **사실상 같은 노드**다.
-  하나로 합칠지는 결정이 필요하다.
+- **`src/relayrobot_description/` 패키지** — 로봇 본체. 전부 활성이다.
+
+> `relayrobot_driver` 는 **옮겼다.** 위의 전용 절 참고.

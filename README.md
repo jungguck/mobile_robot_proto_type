@@ -1,7 +1,28 @@
 # Relay Robot Proto-Type — ROS 2 모바일 로봇 시스템
 
-DDSM400 모터 + EBIMU9DOFV5 IMU + RPLidar S3 기반 차동 구동 모바일 로봇.  
+DDSM400 모터 + RPLidar(S2/S3 계열) 기반 차동 구동 모바일 로봇. IMU 는 선택.  
 Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어기로 자율 주행.
+
+> ## ⚠️ 2026-09-22 — 기본 구성이 바뀌었습니다
+>
+> **IMU 는 선택 사항입니다.** 2D SLAM 에서 yaw 를 잡는 주체는 IMU 가 아니라
+> 라이다 scan matching 이므로, IMU/EKF 없이 동작합니다.
+>
+> | | 기본 (`use_imu:=false`) | 예전 구성 (`use_imu:=true`) |
+> |---|---|---|
+> | `/odom` 발행 | **드라이버** | ekf_filter_node |
+> | `odom→base_link` TF | **드라이버** | ekf_filter_node |
+> | 드라이버 원본 토픽 | `/odom` | `/odom_raw` |
+> | IMU 노드 | 안 띄움 | 띄움 |
+>
+> **아래 문서 곳곳의 `/odom_raw` 와 "EKF 가 TF 를 낸다" 는 `use_imu:=true` 기준입니다.**
+> 기본 구성의 최신 설명은 `README_ROBOT.md` 와 `docs/DEBUG_LOG_2026-09-22.md` 를 보세요.
+>
+> 매핑 중에는 **각속도 ≤ 0.5 rad/s, 선속도 ≤ 0.3 m/s** 를 지킵니다 (IMU 가 없으면
+> 스캔 내 모션 왜곡을 보정할 수단이 없습니다). teleop 기본값은 그 2배라 따로 낮춰야
+> 합니다: `-p speed:=0.15 -p turn:=0.4`.
+>
+> 안 쓰는 파일은 `old_file/` 로 옮겼습니다 (`old_file/README.md`).
 
 > **지원 ROS 버전:** ROS 2 Jazzy (Ubuntu 24.04) / Humble (Ubuntu 22.04) / Foxy (Ubuntu 20.04)
 
@@ -9,7 +30,7 @@ Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어�
 
 | 항목 | Foxy (20.04) | Humble (22.04) | Jazzy (24.04) |
 |------|--------------|----------------|---------------|
-| `colcon build` (6개 패키지 전부) | ✅ 빌드 확인됨 | ✅ | ✅ |
+| `colcon build` (5개 패키지 전부) | ✅ 빌드 확인됨 | ✅ | ✅ |
 | 실기 파이프라인 (모터·IMU·LiDAR·EKF·Cartographer·MPC) | ✅ | ✅ | ✅ |
 | `gazebo.launch.py` 시뮬레이션 | ✅ | ✅ | ❌ **불가** |
 | 시스템 Python | 3.8 | 3.10 | 3.12 |
@@ -43,11 +64,12 @@ graph TD
         SLAM[Cartographer SLAM]
 
         Motor -->|Encoders| Driver
-        Driver -->|"/odom_raw"| EKF
-        IMU -->|"/ebimu_data"| EKF
+        Driver -->|"/odom (기본)"| SLAM
+        Driver -->|"/odom_raw (use_imu)"| EKF
+        IMU -->|"/ebimu_data (선택)"| EKF
 
         Lidar -->|"/scan"| SLAM
-        EKF -->|"/odom"| SLAM
+        EKF -->|"/odom (use_imu)"| SLAM
 
         SLAM -.->|"TF: map -> odom"| Global_Tree((TF Tree))
     end
@@ -56,7 +78,7 @@ graph TD
         GUI[Custom Control GUI]
         MPC[Tube MPC Planner]
 
-        EKF -->|"/odom"| MPC
+        Driver -->|"위치는 TF 로 전달"| MPC
         Global_Tree -.->|"TF Correction"| MPC
         MPC -->|"/cmd_vel"| Driver
         Driver -->|"Serial (10ms Latency)"| Motor
@@ -250,16 +272,19 @@ src/relayrobot_description/config/
 
 ```
 [하드웨어]              [드라이버 노드]                [토픽]
-/dev/motor   ──►  real_robot_driver_260519  ──►  /odom_raw  (nav_msgs/Odometry)
+/dev/motor   ──►  real_robot_driver_260519  ──►  /odom  (기본)
+                                            ──►  TF: odom → base_link  (기본)
                                             ──►  /joint_states
                   sub: /cmd_vel ◄──────────────────────────
 /dev/ttyimu  ──►  ebimu_publisher           ──►  /ebimu_data (sensor_msgs/Imu)
 /dev/rplidar ──►  sllidar_node              ──►  /scan       (sensor_msgs/LaserScan)
 
-[센서 융합]
+[센서 융합]  ※ use_imu:=true 일 때만. 이때 드라이버는 /odom_raw 만 내고 TF 는 양보한다.
 /odom_raw ──┐
             ├──►  ekf_filter_node  ──►  /odom (nav_msgs/Odometry)
 /ebimu_data ┘                      ──►  TF: odom → base_link
+
+  ★ odom→base_link TF 발행자는 시스템에 하나뿐이어야 한다. use_imu 가 그걸 정한다.
 
 [SLAM]
 /scan + TF  ──►  cartographer_node  ──►  /map
@@ -272,14 +297,16 @@ src/relayrobot_description/config/
                                          ──►  /mpc/reference_path, /mpc/tracking_error, /mpc/status
 
 [TF 트리]
-map ──[cartographer]──► odom ──[ekf_node]──► base_link ──[robot_state_publisher]──► lidar_v1_1
+map ──[cartographer]──► odom ──[드라이버 또는 ekf_node]──► base_link
+                                  └─[robot_state_publisher]──► lidar_v1_1
 ```
 
 | 토픽 | 타입 | 발행 노드 |
 |------|------|-----------|
-| `/odom_raw` | `nav_msgs/Odometry` | real_robot_driver_260519 |
-| `/odom` | `nav_msgs/Odometry` | ekf_filter_node |
-| `/ebimu_data` | `sensor_msgs/Imu` | ebimu_publisher |
+| `/odom` | `nav_msgs/Odometry` | **real_robot_driver_260519 (기본)** |
+| `/odom_raw` | `nav_msgs/Odometry` | real_robot_driver_260519 (`use_imu:=true`) |
+| `/odom` | `nav_msgs/Odometry` | ekf_filter_node (`use_imu:=true`) |
+| `/ebimu_data` | `sensor_msgs/Imu` | ebimu_publisher (`use_imu:=true`) |
 | `/scan` | `sensor_msgs/LaserScan` | sllidar_node |
 | `/map` | `nav_msgs/OccupancyGrid` | cartographer_node |
 | `/cmd_vel` | `geometry_msgs/Twist` | bridge_node |
@@ -529,7 +556,8 @@ ros2 run gui_py hw_test
 
 **기능:**
 - **드라이버 노드 Start/Stop**: Motor / IMU / LiDAR / EKF 각각 버튼으로 실행·종료. `●` 표시가 토픽 수신되면 초록, 끊기면 빨강.
-- **Motor**: 속도 슬라이더 + 전진/후진/좌·우회전/정지 버튼 → `/cmd_vel` 발행, `/odom_raw` 실측 v·ω 표시
+- **Motor**: 속도 슬라이더 + 전진/후진/좌·우회전/정지 버튼 → `/cmd_vel` 발행, odom 실측 v·ω 표시
+  (구독 토픽은 `use_ekf` 파라미터가 정함: 기본 `/odom`, `-p use_ekf:=true` 면 `/odom_raw`)
 - **IMU**: 오도메트리 관련 값(yaw, gyro_z, acc_x, acc_y) + Hz. Start 직후 ~10초 캘리브레이션 안내(로봇 정지 유지)
 - **LiDAR**: `/scan` Hz, 포인트 수, 최소거리, 정면거리
 - **Odometry (`/odom`)**: EKF 융합 위치 `x/y/yaw` + 속도 `v/ω`. **EKF Start 전에 Motor·IMU 가 먼저 떠 있어야** `/odom` 이 발행됨.
@@ -635,10 +663,10 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
   "{linear: {x: 0.0}, angular: {z: 0.0}}" --once
 
 # [PC-1] 오도메트리 확인
-ros2 topic echo /odom_raw --field twist.twist.linear
+ros2 topic echo /odom --field twist.twist.linear   # use_imu:=true 면 /odom_raw
 ```
 
-**성공 기준:** `/odom_raw`의 `twist.linear.x ≈ 0.1 (±30%)`, 로봇 실제 전진
+**성공 기준:** `/odom`의 `twist.linear.x ≈ 0.1 (±30%)`, 로봇 실제 전진
 
 **실패 체크리스트:**
 ```
@@ -806,7 +834,7 @@ ros2 launch relayrobot_description real_robot_260519.launch.py
 
 ```bash
 # 세 토픽 모두 살아있어야 함 (PC 에서 DDS 로 젯슨 토픽을 본다)
-ros2 topic hz /odom_raw    # 목표: 10 Hz  (바퀴 인코더)
+ros2 topic hz /odom        # 목표: 10 Hz  (바퀴 인코더. use_imu:=true 면 /odom_raw)
 ros2 topic hz /ebimu_data  # 목표: 50 Hz  (IMU)
 ros2 topic hz /odom        # 목표: 30 Hz  (EKF 출력)
 
@@ -885,7 +913,7 @@ ros2 run tf2_ros tf2_echo odom base_link
 **실패 체크리스트:**
 ```
 [ ] robot_localization 설치: ros2 pkg list | grep robot_localization
-[ ] /odom_raw 발행 확인 (STAGE 1 선행)
+[ ] /odom 발행 확인 (STAGE 1 선행)
 [ ] ekf.yaml 경로:
     ls $(ros2 pkg prefix relayrobot_description)/share/relayrobot_description/config/ekf.yaml
 [ ] IMU 캘리브레이션 완료 로그 확인: "Calibration done!"
@@ -905,7 +933,7 @@ DDSM 은 **명령 유지형**이라 이 확인 없이 자율주행에 들어가�
 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}" --once
 
 # [PC-2] 정지 상태에서 x 가 더 이상 안 늘어나야 한다 (유령 거리 차단)
-ros2 topic echo /odom_raw --field pose.pose.position
+ros2 topic echo /odom --field pose.pose.position
 
 # [젯슨-1] 드라이버 로그에 이 줄이 떠야 한다:
 #   "/cmd_vel 두절 0.5x s > 0.5s -> 정지"
@@ -916,7 +944,7 @@ ros2 topic echo /odom_raw --field pose.pose.position
 | 확인 | 완료 기준 |
 |------|-----------|
 | watchdog | 명령을 끊으면 `cmd_timeout`(0.5s) 안에 정지 |
-| 유령 거리 | 정지 후 `/odom_raw` 의 x/y 가 고정 (계속 늘면 실패) |
+| 유령 거리 | 정지 후 `/odom` 의 x/y 가 고정 (계속 늘면 실패). 2026-09-13 watchdog 으로 해결됨 |
 | 피드백 | 모터 피드백 경고(`피드백 ...s 없음`)가 주행 중에는 안 뜸 |
 
 > 타임아웃을 바꾸려면: `--ros-args -p cmd_timeout:=0.5 -p feedback_timeout:=0.3`
