@@ -235,6 +235,28 @@
       `hardware_test` GUI(모터 패널 + **EKF Start 가 TF 이중 발행**) 세 곳을 고쳤다
     - [[TF_Coordinate_System]] / [[System_Architecture]] 갱신
 - **종결**: `DEBUG_LOG_2026-09-03.md` 3절 2번 — `odom.header.stamp` 이중 취득
+- **저장소 정리 (`old_file/` 신설)**: 모터 코드 사본이 여러 벌이라 "지금 도는 게 어느
+  것인지" 가 헷갈렸다. **지우지 않고 `old_file/<원래 경로>` 로 옮겼다** (30개 + 패키지 1개).
+  `COLCON_IGNORE` 로 빌드 제외. 활성 파일은 26개.
+    - ⚠️ `TubeMPCPlanner.py` 는 옮기면 안 된다 — `bridge_node` 가 sys.path 로 가져오며
+      경로가 코드에 박혀 있다. 펌웨어 소스(`*.ino`)도 남겼다
+    - 파일을 옮기면서 **`README.md` 안의 실행 경로도 같이 고쳐야 했다.**
+      문서의 명령어에 경로가 박혀 있었다
+- **중복 노드 통합**: `relayrobot_driver` 의 `odom_sub` 와 `relayrobot_description` 의
+  `odom_listener` 가 완전히 같은 노드였다. `odom_listener` 로 합치고 패키지 폐지.
+  **워크스페이스 패키지 6개 → 5개.**
+    - 젯슨에 `install/relayrobot_driver/` 가 남아 있으면 낡은 사본이 계속 도니
+      `rm -rf build install log` 후 재빌드할 것
+- **README 두 벌을 하나로**: `README.md`(1350줄) + `README_ROBOT.md`(509줄) 가 겹치는데
+  **서로 다른 시점에 갱신돼 모순이 쌓였다.** 이날 발견한 "Jazzy/Ubuntu 24.04" 오류가
+  정확히 그 증상 — 로봇은 **Humble** 인데 `README_ROBOT.md` 만 Jazzy 로 굳어 있었다.
+  `README.md` 를 정본으로 삼고 고유분만 흡수, 나머지는 `old_file/` 로.
+    - 합치면서 `README.md` 의 낡은 서술도 정리: 트러블슈팅의
+      **"드라이버 TF 브로드캐스터는 이미 비활성화됨"(지금은 정반대)**, STAGE 2/2-B 를
+      (선택)으로, STAGE 4 제목, GUI 의 EKF 안내, `ros-jazzy-*` → `ros-$ROS_DISTRO-*`,
+      라이다 S3 → S2/S3 계열
+    - → **규칙: 같은 내용을 두 문서에 두지 않는다.** 한쪽만 갱신되는 순간 어느 쪽이
+      맞는지 알 수 없어지고, 대개 **안 고친 쪽을 먼저 읽게 된다**
 - **⏳ 미완**: **젯슨 빌드 안 했다 (전원 꺼짐).** `git pull && colcon build --symlink-install`
   부터 해야 반영된다. USB 장치도 09-13 기준 전부 분리 상태.
 - **검증**: 문법 검사만 (`ast`, `bash -n`). 실기 미검증.
