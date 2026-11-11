@@ -18,7 +18,7 @@
 #              (nohup 도 살긴 하지만 로그를 다시 볼 수가 없다. tmux 는 붙어서 볼 수 있다.)
 #
 # 모드:
-#   sensors (기본) — 라이다 + IMU 만. 모터를 건드리지 않으므로 로봇이 움직일 일이 없다.
+#   sensors (기본) — 라이다만. 모터를 건드리지 않으므로 로봇이 움직일 일이 없다.
 #   full           — real_robot_260519.launch.py 전체 (모터 드라이버 + EKF + robot_state_publisher)
 #                    ★ 모터가 연결돼 있으면 /cmd_vel 에 따라 실제로 움직인다. 주변을 확인할 것.
 #   slam           — full + Cartographer. 지도를 만든다(map->odom TF 발행).
@@ -61,7 +61,7 @@ show_status() {
   pgrep -af "$WS/install/[^ ]*/lib/" | sed "s|$WS|~|" | sed 's/^/      /' || echo "      (없음)"
 
   echo "  발행 중인 토픽:"
-  for t in /scan /ebimu_data /odom_raw /odom /joint_states /map /global_path; do
+  for t in /scan /odom_raw /odom /joint_states /map /global_path; do
     # 타임아웃이 짧으면 10Hz 토픽의 첫 샘플을 놓쳐 "안 나온다" 고 오해하게 된다.
     hz=$(timeout 8 ros2 topic hz "$t" 2>/dev/null | grep -oE "average rate: [0-9.]+" | head -1 | grep -oE "[0-9.]+")
     if [ -n "$hz" ]; then
@@ -103,7 +103,7 @@ pkill -TERM -f "$WS/install/[^ ]*/lib/" 2>/dev/null && { ok "이전 노드 종�
 
 # 장치 확인 — 없는 채로 띄우면 노드가 조용히 죽고 원인 찾기가 번거롭다
 step "장치 확인"
-for d in /dev/rplidar /dev/ttyimu; do
+for d in /dev/rplidar; do
   [ -e "$d" ] && ok "$d -> $(readlink -f $d)" || die "$d 가 없습니다. USB 연결과 udev 규칙을 확인하세요."
 done
 if [ "$NEEDS_MOTOR" = true ]; then
@@ -128,13 +128,12 @@ step "tmux 세션 '$SESSION' 생성 (모드: $MODE)"
 tmux new-session -d -s "$SESSION" -n shell -c "$WS"
 
 if [ "$MODE" = "sensors" ]; then
-  # 라이다 — ★ serial_port 를 반드시 넘긴다. launch 기본값 /dev/ttyUSB0 는 IMU 다.
+  # 라이다 — ★ serial_port 를 반드시 넘긴다. launch 기본값은 /dev/ttyUSB0 라
+  #   엉뚱한 포트를 열고 타임아웃으로 죽는다. udev 심볼릭링크를 명시한다.
   # ★ 이 라이다는 A1 이 아니라 S2 계열(1000000 보드)이다. a1 launch 로는 타임아웃으로 죽는다.
   tmux new-window -t "$SESSION" -n lidar -c "$WS" \
     "$ENV_SETUP && ros2 launch sllidar_ros2 sllidar_s2_launch.py serial_port:=/dev/rplidar; exec bash"
-  tmux new-window -t "$SESSION" -n imu -c "$WS" \
-    "$ENV_SETUP && ros2 run ebimu_pkg ebimu_publisher; exec bash"
-  ok "lidar / imu 창 생성"
+  ok "lidar 창 생성"
 else
   tmux new-window -t "$SESSION" -n robot -c "$WS" \
     "$ENV_SETUP && ros2 launch relayrobot_description real_robot_260519.launch.py; exec bash"
@@ -168,8 +167,10 @@ else
   fi
 fi
 
-step "기동 대기 (IMU 캘리브레이션 10초 포함)"
-sleep 14
+# IMU 캘리브레이션(10초)을 기다릴 필요가 없어져서 14초 -> 8초로 줄였다.
+# 라이다 스핀업과 EKF 첫 발행까지는 기다려야 아래 show_status 가 빈 표를 찍지 않는다.
+step "기동 대기 (라이다 스핀업)"
+sleep 8
 
 show_status
 
@@ -182,7 +183,7 @@ cat <<DONE
   로그 직접 보기 :  ssh -t robot 'tmux attach -t robot'
                     (빠져나올 때 Ctrl-b 누르고 d — Ctrl-c 로 끄지 말 것)
   창 이동         :  Ctrl-b 다음 숫자
-                    sensors: 0=shell 1=lidar 2=imu
+                    sensors: 0=shell 1=lidar
                     full:    0=shell 1=robot
                     slam:    + 2=slam        nav: + 3=planner 4=mpc
   상태만 확인     :  ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh status'

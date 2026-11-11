@@ -1,16 +1,36 @@
 # Relay Robot Proto-Type — ROS 2 모바일 로봇 시스템
 
-DDSM400 모터 + EBIMU9DOFV5 IMU + RPLidar S3 기반 차동 구동 모바일 로봇.  
+DDSM400 모터 + RPLidar S3 기반 차동 구동 모바일 로봇.  
 Cartographer SLAM으로 지도 생성 → A* 경로 계획 → Tube-MPC 제어기로 자율 주행.
 
+> ## ⚠️ 2026-11-01 — IMU 를 제거했습니다
+>
+> 구성은 **"바퀴 엔코더 오도메트리 + 라이다"** 두 개입니다. IMU(EBIMU9DOFV5)는 쓰지 않습니다.
+> `ekf.yaml`·launch·udev 규칙·`check_devices.sh`·`odom_check.py` 에서 IMU 를 걷어냈습니다.
+>
+> **이 README 안에 IMU 를 전제한 설명이 아직 남아 있습니다** (STAGE 2 / 2-B, udev 3장치 안내,
+> IMU 설치 가이드 등). 그 부분은 **더 이상 현재 구성이 아닙니다** — 이력으로만 읽으세요.
+> 현재 상태와 할 일의 정본은 **[`docs/RUNBOOK.md`](docs/RUNBOOK.md)** 입니다.
+>
+> **▶ 지금 바로 시험해 보려면 → [✅ 시험 체크리스트](#-시험-체크리스트--이-순서대로만-하면-된다)**
+> (0단계 환경 준비 → 1 모터 → 2 오도메트리 → 3 라이다 → 4 SLAM)
+>
+> `src/ebimu_pkg/` 와 GUI 의 IMU 탭은 **의도적으로 남겨뒀습니다.** 돌아가는 파이프라인에서
+> 호출되지 않으므로 해가 없고, IMU 를 다시 도입할 때 그대로 쓸 수 있습니다.
+
 > **지원 ROS 버전:** ROS 2 Jazzy (Ubuntu 24.04) / Humble (Ubuntu 22.04) / Foxy (Ubuntu 20.04)
+
+> ## 🚦 작업을 시작하려면 → **[`docs/RUNBOOK.md`](docs/RUNBOOK.md)**
+>
+> **"지금 어디까지 됐고, 오늘 뭘 해야 하고, 어떤 스크립트를 쓰는지"** 가 거기 있다.
+> 이 README 는 **설치와 STAGE 가이드**(레퍼런스)다. 매번 처음부터 읽을 필요 없다.
 
 ### 우분투·ROS 배포판 호환표
 
 | 항목 | Foxy (20.04) | Humble (22.04) | Jazzy (24.04) |
 |------|--------------|----------------|---------------|
 | `colcon build` (6개 패키지 전부) | ✅ 빌드 확인됨 | ✅ | ✅ |
-| 실기 파이프라인 (모터·IMU·LiDAR·EKF·Cartographer·MPC) | ✅ | ✅ | ✅ |
+| 실기 파이프라인 (모터·LiDAR·EKF·Cartographer·MPC) | ✅ | ✅ | ✅ |
 | `gazebo.launch.py` 시뮬레이션 | ✅ | ✅ | ❌ **불가** |
 | 시스템 Python | 3.8 | 3.10 | 3.12 |
 
@@ -34,7 +54,6 @@ graph TD
     subgraph "Sensing & Actuation (Hardware)"
         Motor[DDSM400 Motors]
         Lidar[RPLidar S3]
-        IMU[EB-IMU Sensor]
     end
 
     subgraph "Position Estimation (Localization)"
@@ -44,7 +63,6 @@ graph TD
 
         Motor -->|Encoders| Driver
         Driver -->|"/odom_raw"| EKF
-        IMU -->|"/ebimu_data"| EKF
 
         Lidar -->|"/scan"| SLAM
         EKF -->|"/odom"| SLAM
@@ -68,7 +86,7 @@ graph TD
 ## 개발 로드맵
 
 ```
-Phase 0 ✅  하드웨어 검증      Motor / IMU / LiDAR 단독 테스트 + GUI
+Phase 0 ✅  하드웨어 검증      Motor / LiDAR 단독 테스트 + GUI
 Phase 1 ▶  Odometry 정밀 검증  EKF 융합 odom 정확도 확인 → SLAM 입력 기준 확보
 Phase 2    Cartographer SLAM   지도 생성 + map→odom TF 안정성 확인
 Phase 3 🧪 경로 계획 검증       A* 경로 계획기 + /global_path 토픽 시각화
@@ -88,8 +106,8 @@ Phase 5    완전 자율주행        전체 파이프라인 통합 + 성능 검
 | 항목 | 확인 내용 | 완료 기준 |
 |------|-----------|-----------|
 | RPM 팩터 | `/600.0` 변환 실측 | 1m 직진 → `x ≈ 0.9~1.1` |
-| wheel_base | `0.165m` 실측 대조 | 90° 회전 → `yaw ≈ 1.4~1.7 rad` |
-| EKF 융합 | IMU 보정 효과 | 직진 후 yaw drift 없음 |
+| wheel_base | `0.22m` 실측 대조 (제자리 90° 수동 회전) | 90° 회전 → `yaw ≈ 1.4~1.7 rad` |
+| EKF 출력 | 바퀴 단독 패스스루 | `/odom` 이 `/odom_raw` 를 매끄럽게 따라감 |
 | TF tree | `odom→base_link` 발행 | `tf2_echo` 값 출력 |
 
 ### Phase 2 — Cartographer SLAM
@@ -121,9 +139,10 @@ Cartographer는 odom으로 "대충 이만큼 움직였겠다"를 예측하고, *
 - Global SLAM (pose graph + loop closure) → 누적 드리프트를 사후 교정
 
 **꼭 기억할 두 가지:**
-1. 이 설정은 `use_imu_data = false` 라 **Cartographer가 IMU를 직접 안 씁니다.** IMU는
-   오직 EKF → `/odom` 경로로만 들어가요. 즉 **(바퀴+IMU yaw 융합) odom 품질 = SLAM
-   prior 품질** 그 자체. odom이 불안정하면 그대로 SLAM 입력으로 갑니다.
+1. 이 설정은 `use_imu_data = false` 입니다 — **2D SLAM 은 IMU 를 안 씁니다.**
+   그래서 IMU 를 떼도 Cartographer 쪽은 손댈 게 없었습니다. prior 는 `/odom` 하나로
+   들어가고, 지금 그 `/odom` 은 **바퀴 엔코더에서만** 나옵니다. 즉 **바퀴 odom 품질 =
+   SLAM prior 품질** 그 자체 — 예전보다 더 직결됩니다(보정해 줄 IMU yaw 가 없으므로).
 2. **특징 빈약 환경**(긴 직선 복도, 텅 빈 큰 방, 유리벽, LiDAR `max_range` 8m 밖)에서는
    scan이 위치를 못 고정해 **odom에 거의 전적으로 의존** → 이때 odom 불안정이 그대로 드러남.
 
@@ -247,13 +266,12 @@ src/relayrobot_description/config/
 /dev/motor   ──►  real_robot_driver_260519  ──►  /odom_raw  (nav_msgs/Odometry)
                                             ──►  /joint_states
                   sub: /cmd_vel ◄──────────────────────────
-/dev/ttyimu  ──►  ebimu_publisher           ──►  /ebimu_data (sensor_msgs/Imu)
 /dev/rplidar ──►  sllidar_node              ──►  /scan       (sensor_msgs/LaserScan)
 
-[센서 융합]
-/odom_raw ──┐
-            ├──►  ekf_filter_node  ──►  /odom (nav_msgs/Odometry)
-/ebimu_data ┘                      ──►  TF: odom → base_link
+[오도메트리]  ※ 센서가 바퀴 하나라 실질적으로 패스스루 + 평활화다.
+              ※ 그래도 빼면 안 된다 — odom→base_link TF 를 내는 노드가 이것뿐이다.
+/odom_raw  ──►  ekf_filter_node  ──►  /odom (nav_msgs/Odometry)
+                                 ──►  TF: odom → base_link
 
 [SLAM]
 /scan + TF  ──►  cartographer_node  ──►  /map
@@ -273,7 +291,6 @@ map ──[cartographer]──► odom ──[ekf_node]──► base_link ─�
 |------|------|-----------|
 | `/odom_raw` | `nav_msgs/Odometry` | real_robot_driver_260519 |
 | `/odom` | `nav_msgs/Odometry` | ekf_filter_node |
-| `/ebimu_data` | `sensor_msgs/Imu` | ebimu_publisher |
 | `/scan` | `sensor_msgs/LaserScan` | sllidar_node |
 | `/map` | `nav_msgs/OccupancyGrid` | cartographer_node |
 | `/cmd_vel` | `geometry_msgs/Twist` | bridge_node |
@@ -376,8 +393,8 @@ Linux는 USB 장치를 꽂는 순서대로 `/dev/ttyUSB0`, `/dev/ttyUSB1` 번호
 
 #### Step 0: 연결 확인 (`check_devices.sh`) — 꽂자마자 제일 먼저
 
-**3개(라이다·IMU·모터)를 모두 꽂은 직후, 다른 작업 전에 이 스크립트 하나로 연결 상태를 먼저 확인하세요.**
-udev 심볼릭 링크(`/dev/rplidar`·`/dev/ttyimu`·`/dev/motor`)를 확인하고, 링크가 없으면 실제 USB 칩(vendor/product)으로 각 장치를 찾아 어느 포트에 붙었는지까지 알려줍니다.
+**2개(라이다·모터)를 꽂은 직후, 다른 작업 전에 이 스크립트 하나로 연결 상태를 먼저 확인하세요.**
+udev 심볼릭 링크(`/dev/rplidar`·`/dev/motor`)를 확인하고, 링크가 없으면 실제 USB 칩(vendor/product)으로 각 장치를 찾아 어느 포트에 붙었는지까지 알려줍니다.
 
 ```bash
 ~/mobile_robot_proto_type/check_devices.sh
@@ -385,18 +402,18 @@ udev 심볼릭 링크(`/dev/rplidar`·`/dev/ttyimu`·`/dev/motor`)를 확인하�
 
 정상(규칙 적용 완료) 출력:
 ```
-✅ 라이다      : 연결됨  (/dev/rplidar → /dev/ttyUSB1)
-✅ IMU         : 연결됨  (/dev/ttyimu → /dev/ttyUSB0)
+✅ 라이다      : 연결됨  (/dev/rplidar → /dev/ttyUSB0)
 ✅ 모터드라이버: 연결됨  (/dev/motor → /dev/ttyACM0)
-결과: 3개 기기 모두 연결 확인됨 ✅
+결과: 2개 기기 모두 연결 확인됨 ✅
+      기동:  ros2 launch relayrobot_description real_robot_260519.launch.py
 ```
 
 - `✅` = 심볼릭 링크까지 정상 → 바로 실행 가능.
 - `⚠️` = 장치는 꽂혀 있으나 **링크가 없음** → 아직 udev 규칙 미적용. Step 2로 규칙을 적용하세요.
 - `❌` = 장치 자체가 안 잡힘 → USB 재연결/전원/케이블 확인.
 
-> 스크립트는 정본 규칙(`99-robot-devices.rules`)과 **같은 칩 매핑**(모터 `1a86:55d3` / 라이다·IMU `10c4:ea60` + product 문자열)을 씁니다.
-> 규칙 적용 후(Step 2) 다시 한 번 돌려서 세 줄 모두 `✅` 인지 확인하는 것이 마지막 관문입니다.
+> 스크립트는 정본 규칙(`99-robot-devices.rules`)과 **같은 칩 매핑**(모터 `1a86:55d3` / 라이다 `10c4:ea60` + product `CP2102N`)을 씁니다.
+> 규칙 적용 후(Step 2) 다시 한 번 돌려서 두 줄 모두 `✅` 인지 확인하는 것이 마지막 관문입니다.
 
 #### Step 1: 장치 식별
 
@@ -485,14 +502,13 @@ USB를 모두 뽑았다가 다시 꽂은 후, **Step 0의 `check_devices.sh` 를
 
 링크 대상을 직접 보고 싶으면:
 ```bash
-ls -la /dev/rplidar /dev/ttyimu /dev/motor
+ls -la /dev/rplidar /dev/motor
 ```
 
 정상 출력:
 ```
 lrwxrwxrwx ... /dev/motor   -> ttyACM0
-lrwxrwxrwx ... /dev/rplidar -> ttyUSB1
-lrwxrwxrwx ... /dev/ttyimu  -> ttyUSB0
+lrwxrwxrwx ... /dev/rplidar -> ttyUSB0
 ```
 
 ---
@@ -512,9 +528,19 @@ source ~/.bashrc
 
 ---
 
-## 통합 테스트 GUI (권장) — `hw_test`
+## 통합 테스트 GUI — `hw_test`
 
-매번 터미널 여러 개에 STAGE 1~5 명령을 치는 대신, **모터·IMU·LiDAR·EKF 오도메트리를 창 하나에서** 켜고 확인할 수 있는 GUI입니다. SSH로 원격 제어/모니터링할 때 특히 편합니다.
+매번 터미널 여러 개에 STAGE 명령을 치는 대신, **모터·LiDAR·EKF 오도메트리를 창 하나에서**
+켜고 확인할 수 있는 GUI입니다. SSH로 원격 제어/모니터링할 때 편합니다.
+
+> ## ⚠️ 2026-11-01 이후 — 이 GUI 는 IMU 를 전제로 쓰여 있습니다
+>
+> **IMU 탭은 이제 쓰지 않습니다.** 장치가 없으므로 Start 해도 `●` 가 빨강에서 안 바뀝니다.
+> 아래 설명 중 "Motor·IMU 가 먼저 떠 있어야 `/odom` 이 발행된다" 는 **더 이상 사실이 아닙니다** —
+> 지금은 **Motor Start → EKF Start** 만으로 `/odom` 이 나옵니다 (바퀴 단독).
+>
+> **시험은 이 GUI 가 아니라 아래 [✅ 시험 체크리스트](#-시험-체크리스트--이-순서대로만-하면-된다)
+> 로 하세요.** 체크리스트가 현재 구성에 맞춰진 유일한 절차입니다.
 
 ```bash
 ros_setup
@@ -524,18 +550,129 @@ ros2 run gui_py hw_test
 **기능:**
 - **드라이버 노드 Start/Stop**: Motor / IMU / LiDAR / EKF 각각 버튼으로 실행·종료. `●` 표시가 토픽 수신되면 초록, 끊기면 빨강.
 - **Motor**: 속도 슬라이더 + 전진/후진/좌·우회전/정지 버튼 → `/cmd_vel` 발행, `/odom_raw` 실측 v·ω 표시
-- **IMU**: 오도메트리 관련 값(yaw, gyro_z, acc_x, acc_y) + Hz. Start 직후 ~10초 캘리브레이션 안내(로봇 정지 유지)
+- ~~**IMU**~~: 현재 구성에서는 **사용하지 않음** (장치 미설치). 탭은 남아 있으나 값이 안 들어온다
 - **LiDAR**: `/scan` Hz, 포인트 수, 최소거리, 정면거리
-- **Odometry (`/odom`)**: EKF 융합 위치 `x/y/yaw` + 속도 `v/ω`. **EKF Start 전에 Motor·IMU 가 먼저 떠 있어야** `/odom` 이 발행됨.
+- **Odometry (`/odom`)**: EKF 출력 위치 `x/y/yaw` + 속도 `v/ω`. **EKF Start 전에 Motor 가 먼저 떠 있어야** `/odom` 이 발행됨. (IMU 는 불필요 — 2026-11-01 이후)
 - 창을 닫거나(X) 터미널을 닫아도(`Ctrl-C`/SIGHUP) GUI가 띄운 드라이버 노드를 함께 종료.
 
-> `/odom` 확인 순서: **Motor Start → IMU Start(캘리브 10초) → EKF Start** → Odometry 패널에 값 표시.
+> `/odom` 확인 순서: **Motor Start → EKF Start** → Odometry 패널에 값 표시. (IMU Start 는 건너뛴다)
 
 아래 STAGE 1~6은 GUI 없이 터미널에서 단계별로 디버깅할 때의 수동 절차입니다.
 
 ---
 
 ## 단계별 실행 가이드
+
+### ✅ 시험 체크리스트 — 이 순서대로만 하면 된다
+
+> **이 절만 보고 끝까지 갈 수 있게 만든 목록이다.** 각 항목의 자세한 설명과
+> 실패 체크리스트는 아래 STAGE 0~5 본문에 있다. 현재 구성은
+> **모터 + 라이다 (IMU 없음)** 다.
+
+#### 0단계 — 환경 준비 (한 번만. 코드가 바뀐 뒤에는 반드시)
+
+- [ ] **전원** — USB(라이다·모터) 꽂기 → 모터 12V → **젯슨 전원 마지막**
+- [ ] **접속** `ssh robot 'echo OK'`
+- [ ] **★ 젯슨 재빌드** — 설정이 바뀌었으면 이걸 안 하면 **옛 설정이 돈다**
+      ```bash
+      ssh robot 'cd ~/mobile_robot_proto_type && git pull && colcon build --packages-select relayrobot_description'
+      ```
+- [ ] **udev 규칙 적용** (IMU 규칙을 뺐으므로 한 번 갱신 필요)
+      ```bash
+      ssh robot 'cd ~/mobile_robot_proto_type && sudo cp src/relayrobot_description/scripts/99-robot-devices.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger'
+      ```
+- [ ] **의존 패키지** `ssh robot 'ros2 pkg list | grep -E "robot_localization|cartographer_ros"'` → **둘 다** 나와야 함
+- [ ] **STAGE 0** — 장치 2개 `✅` + **시계 차 < 1초**
+      ```bash
+      ssh robot 'cd ~/mobile_robot_proto_type && ./check_devices.sh'
+      ssh robot 'date -u +%s.%N'; date -u +%s.%N
+      ```
+
+> 🚦 **게이트:** 장치 2개 ✅ · 패키지 2개 ✅ · 시계 차 < 1초.
+> 하나라도 안 되면 다음으로 넘어가지 말 것. **시계가 어긋나면 지도가 아예 안 그려진다.**
+
+#### 1단계 — 모터 (STAGE 1)
+
+- [ ] `ssh robot 'cd ~/mobile_robot_proto_type && python3 tools/motor_diag.py'` → 좌우 다 돎
+- [ ] 로봇 기동 (라이다 끄고) — `[젯슨-1]`
+      ```bash
+      ros2 launch relayrobot_description real_robot_260519.launch.py use_lidar:=false
+      ```
+- [ ] `ros2 topic hz /odom_raw` → 10 Hz
+
+> 🚦 **게이트:** 명령에 바퀴가 응답 + `/odom_raw` 발행
+
+#### 2단계 — 오도메트리 (STAGE 4) ★ 여기가 이번 시험의 핵심
+
+- [ ] `ros2 topic hz /odom` → 30 Hz (EKF 출력)
+- [ ] **★ 회전 테스트 — 반드시 할 것**
+      제자리 회전시키면서 `ros2 topic echo /odom --field pose.pose.orientation`
+      → **yaw 가 변해야 한다.** 안 변하면 `ekf.yaml` 의 `odom0_config` yaw(6번째)가 안 먹은 것이다.
+      IMU 를 뺀 뒤 **바퀴가 유일한 방향 소스**라서 이게 통과의 전제다.
+- [ ] `ros2 run tf2_ros tf2_echo odom base_link` → 값이 나와야 함 (EKF 가 TF 를 내는지)
+- [ ] **직진 1m** → `wheel_radius` 검증 (스케일 0.9~1.1)
+      ```bash
+      ros2 run relayrobot_description odom_calibrate --ros-args \
+        -p mode:=straight -p speed:=0.15 -p duration:=10.0 -p measured:=<줄자실측m>
+      ```
+- [ ] **제자리 회전** → `wheel_base` 검증 (여러 바퀴 돌려 오차를 키우면 정확하다)
+      ```bash
+      ros2 run relayrobot_description odom_calibrate --ros-args \
+        -p mode:=rotate -p speed:=0.6 -p duration:=20.0 -p measured:=<실측deg>
+      ```
+- [ ] **STAGE 4-B** — `/cmd_vel` watchdog: 명령 끊고 0.5초 뒤 자동 정지하는지
+
+> 🚦 **게이트:** **회전 시 `/odom` yaw 변함** + `odom→base_link` TF 나옴 + 직진 스케일 0.9~1.1
+
+#### 3단계 — 라이다 (STAGE 3)
+
+- [ ] 로봇 기동 (라이다 포함) — `[젯슨-1]`
+      ```bash
+      ros2 launch relayrobot_description real_robot_260519.launch.py
+      ```
+- [ ] `ros2 topic hz /scan` → 10 Hz 이상
+- [ ] `ros2 topic echo /scan --field header.frame_id` → `lidar_v1_1`
+- [ ] **⚠️ 라이다 장착 방향 — 미검증 항목. 그냥 넘기지 말 것**
+      `rviz2` → Fixed Frame = **`base_link`**, Add → LaserScan → `/scan`
+      로봇 **앞**에 물체를 두고 점이 **화면 앞쪽(+x)** 에 찍히는지 본다.
+      뒤에 찍히면 `urdf/relayrobot.xacro` 의 `Rigid 40` 을 `rpy="0 0 3.14159"` 로 고친다.
+      → 틀린 채로 SLAM 을 돌리면 **지도가 통째로 회전**하고, 방향 오차라 값만 봐서는 안 보인다.
+
+> 🚦 **게이트:** `/scan` 10 Hz + **앞의 물체가 앞에 찍힘**
+
+#### 4단계 — SLAM (STAGE 5)
+
+- [ ] 한 줄로 띄우기 — `[PC-1]`
+      ```bash
+      ssh robot '~/mobile_robot_proto_type/scripts/robot-up.sh slam'
+      ```
+- [ ] **TF 사슬 3개 전부** 확인 — 하나라도 끊기면 지도가 안 생긴다
+      ```bash
+      ros2 run tf2_ros tf2_echo map odom            # cartographer
+      ros2 run tf2_ros tf2_echo odom base_link      # EKF
+      ros2 run tf2_ros tf2_echo base_link lidar_v1_1  # robot_state_publisher
+      ```
+- [ ] `ros2 topic hz /map` → 발행되는지
+- [ ] RViz — `rviz2 -d ~/mobile_robot_proto_type/src/relayrobot_description/config/nav.rviz`
+- [ ] 조종 — `ros2 run teleop_twist_keyboard teleop_twist_keyboard`
+      **★ 순항 0.15 m/s 이상.** 저속(0.05)은 속도가 28% 널뛰어 prior 가 튀고 지도가 깨진다.
+      IMU 가 없어 prior 가 바퀴 하나에서만 나오므로 더 중요하다.
+- [ ] 한 바퀴 돌아 **출발점으로 복귀** → 지도가 닫히는지(loop closure)
+- [ ] 지도 저장 — `ssh robot 'ros2 run nav2_map_server map_saver_cli -f ~/robot_map'`
+
+> 🚦 **게이트:** `map→odom` TF 발행 + 지도 닫힘
+
+#### 막혔을 때 — 어디를 먼저 보나
+
+| 증상 | 먼저 볼 곳 |
+|---|---|
+| 고친 설정이 안 먹는 것 같다 | **0단계 재빌드** 를 했는지 |
+| 회전해도 `/odom` yaw 가 안 변한다 | `ekf.yaml` `odom0_config` 의 yaw(6번째) |
+| `/scan` 은 나오는데 **지도가 안 생긴다** | 라이다가 아니라 **TF 와 시계** (4단계 TF 3개, 0단계 시계) |
+| 지도가 회전해서 생긴다 | **라이다 `rpy`** (3단계 방향 확인) |
+| 지도가 뚝뚝 끊기거나 겹친다 | **주행 속도** (0.15 m/s 이상) + 바퀴 슬립 |
+
+---
 
 ### 진행 순서 — 한 단계를 통과해야 다음으로 간다
 
@@ -544,12 +681,11 @@ ros2 run gui_py hw_test
 
 | 단계 | 무엇 | 터미널 | 통과 기준 | 실패하면 |
 |------|------|--------|-----------|----------|
-| **STAGE 0** | USB·전원·시계 | `PC-1` | 심볼릭 링크 3개 ✅, PC↔젯슨 시계 차 < 1s | 하드웨어 점검 |
-| **STAGE 1** | 모터 단독 | `젯슨-1` `PC-1` | 명령에 바퀴가 응답, `"Connected"` | udev / 전원 / `type:210` |
-| **STAGE 2** | IMU 단독 | `젯슨-1` `PC-1` | 40~60 Hz 발행 | `/dev/ttyimu` |
-| **STAGE 2-B** | **IMU yaw 방향** | `젯슨-1` `PC-1` `PC-2` | 왼쪽 회전에 yaw **증가(+)** | 부호 뒤집기 (아래) |
+| **STAGE 0** | USB·전원·시계 | `PC-1` | 심볼릭 링크 2개 ✅(라이다·모터), PC↔젯슨 시계 차 < 1s | 하드웨어 점검 |
+| **STAGE 1** | 모터 단독 | `젯슨-1` `PC-1` | 명령에 바퀴가 응답, `"Connected"` | `tools/motor_diag.py` 로 진단 |
+| ~~**STAGE 2 / 2-B**~~ | ~~IMU~~ | — | **❌ 2026-11-01 삭제 — IMU 미사용** | 건너뛴다 |
 | **STAGE 3** | LiDAR 단독 | `젯슨-1` `PC-1` `PC-2` | `/scan` 10 Hz | 보드레이트 1000000 |
-| **STAGE 4** | EKF 융합 odom | `젯슨-1` `PC-1` | 1m 직진 → 0.9~1.1 | STAGE 2-B 로 |
+| **STAGE 4** | 바퀴 odom 검증 | `젯슨-1` `PC-1` | 1m 직진 → 0.9~1.1, 제자리 90° → θ≈90° | STAGE 1 로 |
 | **STAGE 4-B** | **`/cmd_vel` watchdog** | `젯슨-1` `PC-1` | 0.5초 뒤 자동 정지 | 자율주행 금지 |
 | **STAGE 5** | SLAM | `젯슨-1` `젯슨-2` `PC-1` `PC-2` | `map→odom` 발행, 지도 닫힘 | STAGE 4 로 |
 | **STAGE 5.5** | **리허설 (로봇 없이)** | `PC-1`~`PC-5` | 목표 도달, QP 실패 0 | 코드 문제 |
@@ -594,8 +730,9 @@ ssh -t robot 'tmux attach -t robot'
 ### STAGE 0: 연결 · 전원 · 시계 확인
 
 ```bash
-# [PC-1] 장치 3개가 다 붙었는지
-ssh robot 'lsusb; ls -l /dev/motor /dev/rplidar /dev/ttyimu'
+# [PC-1] 장치 2개가 다 붙었는지 (IMU 는 쓰지 않는다)
+ssh robot 'cd ~/mobile_robot_proto_type && ./check_devices.sh'
+ssh robot 'lsusb; ls -l /dev/motor /dev/rplidar'
 
 # [PC-1] PC 와 젯슨의 시계 차이 — 1초 이상 벌어지면 안 된다
 ssh robot 'date -u +%s.%N'; date -u +%s.%N
@@ -606,9 +743,12 @@ PC RViz 에서 `TF extrapolation` 에러가 나고 **지도가 아예 안 그려
 어긋나 있으면 젯슨에 `sudo apt install chrony` 로 NTP 를 맞춘다.
 
 **전원 순서:** 전부 끄기 → USB 전부 꽂기 → 모터 보드 12V → **젯슨 전원 마지막.**
-모터 보드는 **전원 사이클마다** `{"T":11002,"type":210}` 초기화가 1회 필요하다.
+끌 때는 반대로 **젯슨 먼저(`ssh robot robot-off`), 모터 나중** — 모터가 도는 중에 젯슨을
+끄면 정지시킬 수단이 사라진다.
 
-**통과 기준:** 심볼릭 링크 3개 모두 `✅`, 시계 차 < 1초
+> ⚠️ **부팅 직후 1분쯤은 USB 열거가 안 끝났다.** 장치가 없다고 바로 판단하지 말 것.
+
+**통과 기준:** 심볼릭 링크 2개(`/dev/rplidar`·`/dev/motor`) 모두 `✅`, 시계 차 < 1초
 
 ---
 
@@ -634,16 +774,44 @@ ros2 topic echo /odom_raw --field twist.twist.linear
 
 **성공 기준:** `/odom_raw`의 `twist.linear.x ≈ 0.1 (±30%)`, 로봇 실제 전진
 
-**실패 체크리스트:**
+**바퀴가 안 돌면 — 노드를 끄고(포트 점유) 아래 순서로:**
+```bash
+# [젯슨] ① 정말 안 도는지 엔코더로 확정 + 좌우 균형
+python3 tools/motor_diag.py
+
+# [젯슨] ② 떨리기만 하는 거라면 속도별 산포
+python3 tools/motor_diag.py --sweep
+
+# [젯슨] ③ 보드가 응답은 하는지 raw 로
+python3 ddsm_raw_monitor.py        # Ctrl+C 로 종료
 ```
-[ ] ls -la /dev/motor           → 없으면 USB 재연결 후 udev 재확인
-[ ] ESP32 모드 점퍼 확인          → Arduino 모드면 JSON 무응답
-[ ] ros2 run 실행 로그에 "Connected" 출력 확인
+```
+[ ] ls -la /dev/motor           → 없으면 USB 재연결 후 udev 재확인 (부팅 직후면 1분 기다릴 것)
+[ ] 드라이버 노드가 /dev/motor 를 점유 중인지 → 점유 중이면 진단 스크립트가 못 연다
+[ ] 모터 12V 전원이 들어와 있는지
+```
+
+> ❌ `type:210` 을 안 보내서 그렇다고 의심하지 말 것 — 2026-09-16 에 재현되지 않았다.
+> ❌ 떨림을 `act` 나 재전송 주기로 잡으려 하지 말 것 — 전수 스윕으로 배제됐다.
+> **떨림의 원인은 저속 헌팅이다. 순항 속도를 0.15 m/s 이상으로 잡아라.**
+> (0.05 m/s 변동 28% → 0.20 m/s 2%. `docs/DEBUG_LOG_2026-09-16.md` 6절)
+
+**전진/후진 직접 시험 (ROS 없이):**
+```bash
+python3 tools/drive_straight.py --dist 0.30 --speed 0.15     # 전진
+python3 tools/drive_straight.py --dist -0.30 --speed 0.15    # 후진
 ```
 
 ---
 
 ### STAGE 2: IMU 단독 테스트
+
+> # ❌ 이 단계는 삭제됐습니다 (2026-11-01)
+>
+> IMU 를 쓰지 않는 구성으로 확정했습니다. **이 절은 건너뜁니다.**
+> 아래 내용은 IMU 를 다시 도입할 때를 위한 이력으로만 남겨둡니다.
+> 현재 경로는 STAGE 1(모터) → STAGE 3(LiDAR) → STAGE 4(바퀴 odom) → STAGE 5(SLAM) 입니다.
+
 
 **목표:** EBIMU 데이터 수신, yaw 방향 정합성 확인
 
@@ -671,6 +839,13 @@ ros2 topic echo /ebimu_data --field orientation
 ---
 
 ### STAGE 2-B: IMU yaw **방향** 테스트 — 부호 하나가 전체를 뒤집는다
+
+> # ❌ 이 단계는 삭제됐습니다 (2026-11-01)
+>
+> IMU 를 쓰지 않는 구성으로 확정했습니다. **이 절은 건너뜁니다.**
+> 아래 내용은 IMU 를 다시 도입할 때를 위한 이력으로만 남겨둡니다.
+> 현재 경로는 STAGE 1(모터) → STAGE 3(LiDAR) → STAGE 4(바퀴 odom) → STAGE 5(SLAM) 입니다.
+
 
 **목표:** 로봇을 왼쪽(반시계)으로 돌렸을 때 yaw 가 **+ 방향으로 증가**하는지 확인
 
@@ -771,8 +946,8 @@ rviz2
 
 ### STAGE 4: Odometry (EKF 융합) 테스트
 
-**목표:** 바퀴 오도메트리 + IMU → EKF 융합 → /odom 발행, TF 트리 완성  
-**선행 조건:** STAGE 1, 2 통과 (모터·IMU 정상 동작 확인)
+**목표:** 바퀴 오도메트리 → EKF → `/odom` 발행 + `odom→base_link` TF, 기구학 상수 검증  
+**선행 조건:** STAGE 1 통과 (모터 정상 동작). **STAGE 2(IMU)는 삭제됐으니 건너뛴다.**
 
 > 노드는 **젯슨**, 확인·명령은 **PC** 에서 한다. 젯슨 터미널은 `ssh robot` 또는
 > `ssh -t robot 'tmux attach -t robot'` 으로 연다.
@@ -784,24 +959,25 @@ rviz2
 ```bash
 # 먼저 빌드
 cd ~/mobile_robot_proto_type
-colcon build --packages-select ebimu_pkg relayrobot_description
+colcon build --packages-select relayrobot_description
 source install/setup.bash
 
-# 전체 하드웨어 launch (Motor + IMU + LiDAR + EKF + robot_state_publisher)
+# 전체 하드웨어 launch (Motor + LiDAR + EKF + robot_state_publisher)
 ros2 launch relayrobot_description real_robot_260519.launch.py
+
+# 오도메트리만 볼 때는 라이다를 끈다
+ros2 launch relayrobot_description real_robot_260519.launch.py use_lidar:=false
 ```
 
-> IMU 노드는 시작 직후 **10초 캘리브레이션**합니다. 이 시간 동안 로봇을 움직이지 마세요.  
-> 로그에 `Calibration done!` 출력 후 다음 단계로 진행합니다.
+> IMU 캘리브레이션 대기는 **없어졌습니다.** IMU 를 쓰지 않으므로 바로 다음 단계로 갑니다.
 
 ---
 
 #### Step 2. 토픽 생존 확인 — `[PC-1]`
 
 ```bash
-# 세 토픽 모두 살아있어야 함 (PC 에서 DDS 로 젯슨 토픽을 본다)
+# 두 토픽 모두 살아있어야 함 (PC 에서 DDS 로 젯슨 토픽을 본다)
 ros2 topic hz /odom_raw    # 목표: 10 Hz  (바퀴 인코더)
-ros2 topic hz /ebimu_data  # 목표: 50 Hz  (IMU)
 ros2 topic hz /odom        # 목표: 30 Hz  (EKF 출력)
 
 # 정지 상태 sanity check: x/y/yaw 모두 0에 가까워야 함
@@ -1163,7 +1339,7 @@ python3 ~/mobile_robot_proto_type/src/relayrobot_driver/relayrobot_driver/motor_
 
 **odom_raw vs odom를 분리한 이유:**
 - `odom_raw`: 순수 휠 인코더 기반 (미끄러짐 오차 포함)
-- `odom`: odom_raw + IMU를 EKF로 융합 → SLAM의 map→odom 보정 실시간 반영
+- `odom`: odom_raw(바퀴)를 EKF가 발행 → SLAM의 map→odom 보정 실시간 반영
 
 **제어기가 /odom을 쓰는데 SLAM 보정이 되는 이유:**  
 EKF가 `odom→base_link`를 발행하고, SLAM이 `map→odom`을 보정합니다.  

@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import JointState, Imu
+from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 import math
@@ -16,7 +16,7 @@ class RealRobotDriver260519(Node):
     역할: 모터 시리얼 통신 + 바퀴 오도메트리 계산
 
     발행 토픽:
-      /odom_raw    → EKF가 구독해서 IMU와 융합 → /odom 생성
+      /odom_raw    → EKF가 구독 → /odom 생성 (바퀴 단독, IMU 미사용)
       /joint_states → robot_state_publisher가 구독해서 RViz 바퀴 시각화
     구독 토픽:
       /cmd_vel     → MPC 또는 teleop에서 속도 명령 수신
@@ -80,7 +80,7 @@ class RealRobotDriver260519(Node):
         self.last_cmd_time = None    # None = 아직 한 번도 안 받음
         self.cmd_timed_out = False   # 두절 경고를 한 번만 찍기 위한 래치
 
-        # /odom_raw: 순수 바퀴 인코더 odom. EKF가 이걸 받아 IMU와 융합 → /odom 출력
+        # /odom_raw: 순수 바퀴 인코더 odom. EKF가 이걸 받아 /odom + TF 출력
         # /odom을 직접 발행하지 않는 이유: EKF 출력과 토픽 이름 충돌 방지
         self.odom_pub  = self.create_publisher(Odometry,   'odom_raw',     10)
         self.joint_pub = self.create_publisher(JointState,  '/joint_states', 10)
@@ -205,8 +205,9 @@ class RealRobotDriver260519(Node):
         odom.twist.twist.linear.x  = v
         odom.twist.twist.angular.z = w
 
-        # covariance: EKF에게 "이 데이터를 얼마나 믿어도 되는지" 알려주는 값
-        # 값이 클수록 불확실 → EKF가 이 센서를 덜 믿고 IMU를 더 반영
+        # covariance: EKF에게 "이 데이터를 얼마나 믿어도 되는지" 알려주는 값.
+        # 지금은 센서가 이것뿐이라 경쟁 상대가 없다 — 값 자체보다 EKF 출력이
+        # 매끄럽게 나오는지가 중요하다. yaw(마지막 0.1)만 상대적으로 크게 둔다.
         odom.pose.covariance = [
             0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.05, 0.0, 0.0, 0.0, 0.0,

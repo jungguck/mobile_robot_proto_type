@@ -204,3 +204,115 @@
       **10번(stale 피드백)을 "미해결" → "해결(2026-09-13)"** 로 정정
     - 남은 고아 링크: `ROS2_Packages` (index 에 미작성으로 명시)
 - **상세**: `docs/DEBUG_LOG_2026-09-13.md` 11~18절
+
+## [2026-09-16] Hardware | **모터 실구동 성공** — 명령 규약 재확정 / 좌우 ID 확정 / 떨림 원인 규명
+- **내용**: 라이다·IMU 없이 **모터만** 연결해 시험. 09-13 에 "모터 구동 미실시" 로 남았던
+  항목을 닫았다. **12V 로 실제로 굴러가는 것을 처음 확인**했다.
+- **주행 결과**: 전진 50cm / 전진 30cm / 후진 30cm 전부 성공. odom 오차 1% 이내,
+  정지 후 잔여속도 0.0 cm/s. 전후진 대칭. (줄자 실측은 미실시 → `wheel_radius` 보정 미정)
+- **★ 떨림(뚝뚝 끊김) 원인 = 저속 헌팅**: 정상상태 속도 변동이
+  0.05 m/s 에서 **28%**, 0.10 에서 9%, 0.15 에서 6%, 0.20 에서 **2%**.
+  **순항 속도를 0.15 m/s 이상으로 잡을 것.**
+    - **배제됨**: `act`(0~100 스윕)·재전송 주기(0.02~0.2s 스윕) 둘 다 원인이 아니다. 재시도 금지
+    - 측정은 오른쪽 모터 기준 — **왼쪽 확인은 미완**
+- **좌우 확정**: `id=1` 오른쪽(전진 음수) / `id=2` 왼쪽(전진 양수). 좌우 균형은
+  cmd 294 에서 R 1.010바퀴 / L 0.986바퀴로 **차이 2.4%, 불균형 없음**
+    - ID 등록 확인법: `id=3` 에 명령을 보내 **무응답**이면 그 ID 모터가 없는 것.
+      펌웨어 `ddsm_ctrl()` 이 ID 를 **검증하지 않고** 그대로 RS485 에 실어 보내기 때문
+- **★ 정정 — `type:210` 인과 무효화**: 08-22 의 "`type:210` 을 안 보내면 구동 명령에
+  응답조차 안 한다" 가 **재현되지 않았다.** `type:115` 로도 정상 회전했고,
+  펌웨어가 성공 시 찍어야 할 `DDSM210` 에코가 한 번도 오지 않았다.
+  실제 보드 펌웨어가 저장소 소스와 다를 가능성. **해당 문서들을 수정했다**
+- **새로 문서화한 함정**:
+    - **`pos` 는 1회전(0~32767)마다 되감긴다.** 누적은 `mil*32768 + pos` 로 구할 것
+    - **반이중 RS485** — 여러 모터에 연속 전송 시 10ms 간격 필수. 충돌하면 `{"T":20010,"crc":0}`
+    - 젯슨은 **Python 3.10** — f-string 따옴표 중첩은 3.12+ 문법이라 PC 에서 통과해도 죽는다
+    - 부팅 직후 **USB 열거가 늦다.** 1분 시점의 장치 목록을 믿지 말 것
+- **전원 차단 순서 문서화**: **젯슨 먼저(`robot-off`), 모터 나중.** heartbeat 가 비활성이라
+  모터가 도는 중에 젯슨을 끄면 정지 명령을 보낼 수단이 사라진다
+- **★ 진입점 정비 — "매번 맨땅에 헤딩" 문제 대응**: 세션마다 상태를 다시 파악하느라
+  시간을 쓰는 게 반복돼서, **단일 진입점 `docs/RUNBOOK.md`** 를 만들었다.
+  현재 진행 상태 / 다음 할 일 / **증상별 스크립트 선택표** / 시작·종료 절차 /
+  "하지 말 것" 목록 / 세션 종료 시 갱신 규칙. README·위키 인덱스에서 링크했다.
+    - 오늘 만든 진단 스크립트가 젯슨 `/tmp` 에 있다가 종료와 함께 날아갔다.
+      **쓸만한 임시 스크립트는 `tools/` 에 남긴다** 를 규칙으로 문서화
+- **작업**:
+    - `docs/DEBUG_LOG_2026-09-16.md` 신규
+    - **`docs/RUNBOOK.md` 신규 — 세션 진입점**
+    - `tools/motor_diag.py` 신규 — 엔코더 누적치로 구동 여부·좌우 균형·속도 산포 판정
+    - `tools/drive_straight.py` 신규 — 전/후진 주행 + 떨림 통계 + 보정계수 계산
+    - **수정** `README.md` — RUNBOOK 링크, STAGE 0·1 의 `type:210` 주장 제거,
+      실패 체크리스트를 실제로 유효한 진단 절차로 교체
+    - `src/ddsm_example/ddsm_python/README.md` 신규 — **레거시 폴더임을 명시**.
+      `no_terminal.py` 는 **좌우 ID 가 뒤바뀌어** 있고 `wheel_base` 가 1/10,
+      `check_feedback.py`·`test_encoder.py` 는 포트가 IMU 로 하드코딩, `enable_test.py` 는
+      ESP32 에 raw 패킷을 쏘는 성립 불가 코드, `propose_mpc.py` 는 import 부터 실패
+    - **수정** `docs/DEBUG_LOG_2026-08-22.md` — `type:210` 인과 주장 5군데
+    - **수정** [[Relay_Robot_Hardware]] — 12V 구동 실측 확인, 저속 헌팅 표,
+      전원 차단 순서, `pos` 되감김, RS485 간격, ID 확인법
+- **미해결**: 세션 초반의 **무토크 상태**(응답은 오는데 `spd:0`, 개루프에서도 무반응)가
+  무엇 때문에 풀렸는지 규명 못 함. 구버전 `motor_drive.py` 실행 후 정상화됐으나,
+  그 시점 보드 타입은 이미 210 이었으므로 타입 차이로는 설명되지 않는다
+- **상세**: `docs/DEBUG_LOG_2026-09-16.md`
+
+## [2026-11-01] Decision | IMU 를 파이프라인에서 제거 — 바퀴 odom + LiDAR 로 SLAM
+- **내용**: 46일 만의 복귀. IMU 를 설치하지 않기로 확정하고 "IMU 없이 SLAM 이 되는가" 를
+  먼저 규명했다. 결론은 **된다**. 단, 막고 있던 것은 IMU 자체가 아니라 **EKF 설정**이었다.
+- **핵심 규명**:
+    - Cartographer 는 원래부터 `TRAJECTORY_BUILDER_2D.use_imu_data = false` — **2D SLAM 은
+      IMU 를 안 쓴다.** SLAM 쪽은 손댈 것이 없었다.
+    - 진짜 블로커는 `ekf.yaml` 이었다. 08-22 에 [[Debugging_Experience#12]] 로 도입한
+      "방향은 IMU yaw, 위치는 바퀴 vx" 전략 때문에 바퀴의 x·y·yaw·v_yaw 가 **전부 false**.
+      → IMU 를 빼면 **yaw 관측이 0 개**가 되어 로봇이 회전을 못 느낀다.
+    - **해법은 그 전략을 되돌리는 것.** 끈 이유가 "바퀴 yaw ↔ IMU yaw 충돌" 이었으므로
+      IMU 가 없으면 끌 이유도 없다. 바퀴의 x·y·yaw·v_yaw 를 다시 켰다.
+- **EKF 노드는 남겼다 (다시 헷갈리지 말 것)**: `odom→base_link` TF 를 내는 노드가 그것뿐이다.
+  드라이버는 `TransformBroadcaster` 를 **import 만 하고 안 쓴다** — 이중 발행 방지 목적.
+  EKF 를 빼면 TF 사슬이 끊겨 Cartographer 가 못 돈다. 센서가 하나라 융합은 없고 패스스루다.
+- **작업**:
+    - `docs/DEBUG_LOG_2026-11-01.md` 신규
+    - **수정** `config/ekf.yaml` — 바퀴 단독 재작성. `imu0` 삭제, `odom0_config` x·y·yaw·v_yaw 켬
+    - **수정** `launch/real_robot_260519.launch.py` — `ebimu_publisher` 노드 삭제
+    - **수정** `real_robot_driver_260519.py` — 미사용 `Imu` import + 낡은 "IMU 와 융합" 주석
+    - **수정** `scripts/99-robot-devices.rules` — `ttyimu` udev 규칙 삭제
+    - **수정** `check_devices.sh` — 2 장치(라이다·모터)로 축소
+    - **수정** `scripts/robot-up.sh` — tmux `imu` 창 / `/dev/ttyimu` 대기 / `/ebimu_data` 확인 삭제
+    - **수정** `tools/odom_check.py` — IMU 구독 및 ② 회전 스케일 삭제
+    - **수정** `docs/RUNBOOK.md` · `README.md` — 상태·아키텍처·토픽표·STAGE 표 갱신
+- **덤으로 고친 것**: `README.md` Phase 1 표의 `wheel_base = 0.165m` → **`0.22m`**.
+  09-03 로그 3절이 이미 틀렸다고 지적해 둔 항목인데 그때 반영되지 않았다.
+- **남겨둔 것 (의도적)**: `src/ebimu_pkg/`, `gui_py/hardware_test.py` 의 IMU 탭.
+  돌아가는 경로에서 호출되지 않아 해가 없고 IMU 재도입 시 그대로 쓸 수 있다.
+  `my_cartographer.lua` 의 `imu_sampling_ratio` 는 **Cartographer 필수 옵션이라 삭제 금지**.
+- **대가**: ① yaw 드리프트를 잡아줄 독립 센서 없음 — 바퀴 헛도는 바닥에서 지도 품질 저하
+  ② `odom_check.py` 회전 스케일 자동 계산 상실 → `wheel_base` 는 **제자리 90° 수동 회전**으로 보정
+  ③ prior 가 바퀴 하나에서만 나오므로 **저속 헌팅이 더 치명적** (순항 0.15 m/s 이상 필수)
+- **미해결 — 실기 검증 전무**: 작업 중 젯슨 전원이 꺼져 있었다. PC 에서 YAML 파싱 /
+  launch 모듈 로드 / 스크립트 문법까지만 확인했다. **젯슨 재빌드와 udev 재적용이 선행**이며,
+  핵심 검증점은 **제자리 회전 시 `/odom` 의 yaw 가 변하는지**다.
+- **갱신 필요 (미반영)**: [[System_Architecture]] · [[Relay_Robot_Hardware]] 가 아직 IMU 를
+  구성 요소로 기술하고 있다. 다음 세션에서 반영할 것.
+- **상세**: `docs/DEBUG_LOG_2026-11-01.md`
+
+## [2026-11-10] Verify | TF 사슬 점검 — 발행자 3개 확인, 라이다 장착 방향은 미검증
+- **내용**: "TF 관계가 아예 없는 것은 아닌가" 를 코드로 확인했다. **있다.**
+  `map→odom`(cartographer) / `odom→base_link`(EKF) / `base_link→lidar_v1_1`(robot_state_publisher)
+  세 발행자가 각자 한 구간씩 맡는다. URDF 에 좌표도 실제로 들어 있다(라이다 = base_link 기준 12.2cm 위).
+- **규명**:
+    - **라이다 단독(STAGE 3)에는 TF 가 필요 없다.** `sllidar_node` 는 `/scan` 발행만 하고
+      TF 를 조회하지 않는다. 단 RViz 로 보려면 변환이 필요하니
+      **Fixed Frame 을 `lidar_v1_1`** 로 두면 TF 없이도 보인다.
+    - **SLAM 에는 TF 가 필수다.** `tracking_frame = base_link` 라 `/scan`(`lidar_v1_1` 기준)의
+      변환이 있어야 하고, `provide_odom_frame = false` 라 `odom→base_link` 는 외부(EKF)가 줘야 한다.
+      → [[2026-11-01]] 에 **EKF 를 못 뺀 이유**가 이것이다.
+    - **URDF 바퀴 간격 0.165 vs 실측 0.22 는 실기 SLAM 에 영향 없다.** 오도메트리는 URDF 를
+      읽지 않고 `motor_drive_1.py` 의 `wheel_base` 파라미터를 쓴다. URDF 바퀴 좌표는
+      RViz 그림과 Gazebo 전용 → 09-03 의 "보류" 판단이 옳았다.
+    - **함정**: `lookup_transform_timeout_sec = 0.2` 라 scan 시각의 TF 를 0.2초 안에 못 찾으면
+      그 scan 을 버린다. **PC↔젯슨 시계 차**와 **기동 순서**(TF 먼저, cartographer 나중)가 중요한 이유다.
+      `/scan` 은 나오는데 지도가 안 생기면 라이다보다 **TF·시계를 먼저 본다.**
+- **★ 새 미해결**: URDF `Rigid 40` 의 `rpy="0 0 0"` 은 "라이다 0° = 로봇 전진(+x)" 을 전제하는데
+  **물리적으로 검증되지 않았다.** 180° 돌아 꽂혀 있으면 지도가 통째로 회전한다. 방향 오차라
+  값만 봐서는 안 보인다. STAGE 3 에서 RViz 로 같이 확인할 것 (RUNBOOK 2절에 항목 추가).
+- **작업**: `docs/DEBUG_LOG_2026-11-10.md` 신규 / `docs/RUNBOOK.md` 1절 상태표 + 2절 체크 항목 추가
+- **상세**: `docs/DEBUG_LOG_2026-11-10.md`

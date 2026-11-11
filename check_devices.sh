@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# USB 기기 연결 확인 — 라이다 / 모터드라이버 / IMU
+# USB 기기 연결 확인 — 라이다 / 모터드라이버
 # 사용법: ./check_devices.sh
 #
-# 동작: udev 심볼릭링크(/dev/rplidar, /dev/motor, /dev/ttyimu)를 먼저 확인하고,
+# 동작: udev 심볼릭링크(/dev/rplidar, /dev/motor)를 먼저 확인하고,
 #       링크가 없으면 실제 USB 칩(vid:pid + product 문자열)으로 기기를 찾아 보고한다.
 #
 # 칩 매핑 (정본: src/relayrobot_description/scripts/99-robot-devices.rules):
 #   - 모터  : QinHeng USB Single Serial (1a86:55d3) — 시스템에서 유일, 보통 /dev/ttyACM0
 #   - 라이다: Silicon Labs CP2102N (10c4:ea60, product "CP2102N ...") — /dev/ttyUSB*
-#   - IMU   : Silicon Labs CP2102  (10c4:ea60, product "CP2102 ...")  — /dev/ttyUSB*
-#     ※ 라이다·IMU는 같은 칩(10c4:ea60)이라 반드시 product 문자열로 구분한다.
+#
+# ※ 2026-11-01: IMU 확인을 제거했다. IMU 를 쓰지 않는 구성으로 확정했다.
+#               구성은 "바퀴 오도메트리 + 라이다" 두 개로 SLAM 까지 간다.
 set -u
 
 MOTOR_ID="1a86:55d3"   # 모터드라이버 (QinHeng USB Single Serial)
-CP210X="10c4:ea60"     # 라이다 & IMU (동일 칩 CP210x — product 문자열로 구분)
+CP210X="10c4:ea60"     # 라이다 (Silicon Labs CP210x)
 
 # match <node> <vid:pid> : 해당 tty 노드가 주어진 vid:pid 인지 확인
 match() {
@@ -46,22 +47,6 @@ else
   fi
 fi
 
-# --- IMU (CP2102, 구형) : CP2102N(라이다)와 구분하려고 product 문자열까지 확인 ---
-IMU=""
-if [ -e /dev/ttyimu ]; then
-  echo "✅ IMU         : 연결됨  (/dev/ttyimu → $(readlink -f /dev/ttyimu))"
-else
-  for d in /dev/ttyUSB*; do
-    [ -e "$d" ] || continue
-    match "$d" "$CP210X" && has_product "$d" "CP2102 " && { IMU="$d"; break; }
-  done
-  if [ -n "$IMU" ]; then
-    echo "⚠️  IMU         : 연결됨($IMU) — 심볼릭링크 /dev/ttyimu 없음 (udev 규칙 재적용 필요)"
-  else
-    echo "❌ IMU         : 연결 안 됨"; result=1
-  fi
-fi
-
 # --- 모터드라이버 (QinHeng 1a86:55d3, 보통 ttyACM0) ---
 MOTOR=""
 if [ -e /dev/motor ]; then
@@ -79,7 +64,8 @@ fi
 
 echo
 if [ "$result" -eq 0 ]; then
-  echo "결과: 3개 기기 모두 연결 확인됨 ✅"
+  echo "결과: 2개 기기 모두 연결 확인됨 ✅"
+  echo "      기동:  ros2 launch relayrobot_description real_robot_260519.launch.py"
 else
   echo "결과: 일부 기기 누락 ❌  (연결/전원 확인 후, udev 규칙 재적용: Step 2 참고)"
 fi

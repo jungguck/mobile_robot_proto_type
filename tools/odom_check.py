@@ -4,15 +4,23 @@ odom_check.py — PC(개발기)에서 젯슨의 오도메트리를 원격 진단
 
 [무엇을 하나]
   젯슨이 발행하는 토픽을 DDS 로 구독해서(같은 ROS_DOMAIN_ID=0),
-  "명령(cmd_vel) vs 바퀴 오도메트리(/odom_raw) vs IMU(/ebimu_data) vs EKF(/odom)"
-  네 소스를 실시간으로 나란히 비교한다. 로봇을 조금 굴려보고 아래 두 비율이
+  "명령(cmd_vel) vs 바퀴 오도메트리(/odom_raw) vs EKF(/odom)"
+  세 소스를 실시간으로 나란히 비교한다. 로봇을 조금 굴려보고 아래 비율이
   1.0 에서 벗어나면 기구학 상수가 틀린 것이다.
 
     ① 선속도 스케일  = odom_raw 이동거리 / 명령 이동거리   → 벗어나면 rpm_scale / wheel_radius
-    ② 회전 스케일    = odom_raw Δθ       / IMU Δyaw        → 벗어나면 wheel_base
 
-  ②는 IMU 절대 yaw 를 기준으로 삼으므로 줄자 없이도 회전 오차를 잡아낸다.
-  (이 IMU 는 자이로를 안 주고 절대 자세만 준다 — ekf.yaml 주석 참고)
+  2026-11-01: IMU 를 파이프라인에서 제거했으므로 회전 스케일을 자동으로 못 구한다.
+  (예전에는 IMU 절대 yaw 를 독립 기준으로 삼아 wheel_base 를 역산했다.)
+  회전은 사람이 직접 본다:
+
+    reset → 로봇을 제자리에서 정확히 90° 돌림 → 아래 ODOM_RAW 의 θ 를 읽는다.
+    θ 가 90° 가 아니면 그 비율만큼 wheel_base 를 보정한다.
+      wheel_base_new = wheel_base_old x (실제 90) / (표시된 θ)
+
+  바퀴만으로 나오는 yaw 는 슬립 때문에 드리프트한다. 그건 Cartographer scan
+  매칭이 교정하는 종류의 오차다 (ekf.yaml 주석 참고). 여기서 잡으려는 건
+  드리프트가 아니라 "기구학 상수가 체계적으로 틀린 것" 이다.
 
 [이 노드는 젯슨이 아니라 PC 에서 돈다]
   전부 표준 메시지라 Jazzy(PC) ↔ Humble(젯슨) cross-distro 로 그냥 받아진다.
@@ -35,7 +43,7 @@ odom_check.py — PC(개발기)에서 젯슨의 오도메트리를 원격 진단
 
   # 3) 캘리브레이션 절차
   #  - 직진 테스트: 바닥에 1.0 m 표시 → reset → 그 지점까지 굴림 → 정지 → '선속도 스케일' 읽기
-  #  - 회전 테스트: reset → 제자리 회전(예: angular.z 만) → '회전 스케일' 읽기 (줄자 불필요)
+  #  - 회전 테스트: reset → 제자리에서 정확히 90° 회전 → ODOM_RAW 의 θ 를 90° 와 비교
   ros2 service call /odom_check/reset std_srvs/srv/Trigger    # 누적값 0 으로
 
 ⚠️ 안전: 로봇이 실제로 움직인다. 바퀴 띄우거나 주변 비우고 할 것.
@@ -47,7 +55,6 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
 from std_msgs.msg import Float64
 from std_srvs.srv import Trigger
 
@@ -111,25 +118,17 @@ class OdomCheck(Node):
         self.ekf_unwrap = AngleUnwrapper()
         self.ekf_seen = False
 
-        # ── /ebimu_data (IMU 절대 yaw) ──
-        self.imu_unwrap = AngleUnwrapper()
-        self.imu_dyaw = 0.0
-        self.imu_yaw = 0.0
-        self.imu_seen = False
-
         self.create_subscription(Twist,    '/cmd_vel',    self.on_cmd,  10)
         self.create_subscription(Odometry, '/odom_raw',   self.on_raw,  10)
         self.create_subscription(Odometry, '/odom',       self.on_ekf,  10)
-        self.create_subscription(Imu,      '/ebimu_data', self.on_imu,  50)
 
         self.create_service(Trigger, '~/reset', self.on_reset)
 
         # rqt_plot 로 실시간 그래프를 그릴 수 있게 핵심값을 토픽으로도 발행한다.
-        #   rqt_plot /odom_check/raw_theta_deg /odom_check/imu_dyaw_deg   ← 회전 겹쳐보기
-        #   rqt_plot /odom_check/cmd_path /odom_check/raw_path            ← 직진 겹쳐보기
+        #   rqt_plot /odom_check/cmd_path /odom_check/raw_path    ← 직진 겹쳐보기
+        #   rqt_plot /odom_check/raw_theta_deg                     ← 회전 보기
         self.pub = {n: self.create_publisher(Float64, f'~/{n}', 10) for n in (
-            'lin_scale', 'rot_scale', 'cmd_path', 'raw_path',
-            'raw_theta_deg', 'imu_dyaw_deg')}
+            'lin_scale', 'cmd_path', 'raw_path', 'raw_theta_deg')}
 
         # 명령 적분용 고속 타이머(20Hz) + 출력용(2Hz)
         self.create_timer(0.05, self.integrate_cmd)
@@ -180,11 +179,6 @@ class OdomCheck(Node):
         self.ekf_theta = self.ekf_unwrap.update(
             yaw_from_quaternion(msg.pose.pose.orientation))
 
-    def on_imu(self, msg: Imu):
-        self.imu_seen = True
-        self.imu_yaw = yaw_from_quaternion(msg.orientation)
-        self.imu_dyaw = self.imu_unwrap.update(self.imu_yaw)
-
     def on_reset(self, request, response):
         self.cmd_dist = self.cmd_path = self.cmd_rot = 0.0
         self.raw_x0 = self.raw_y0 = None
@@ -192,7 +186,6 @@ class OdomCheck(Node):
         self.raw_unwrap = AngleUnwrapper()
         self.ekf_x0 = self.ekf_y0 = None
         self.ekf_unwrap = AngleUnwrapper()
-        self.imu_unwrap = AngleUnwrapper()
         response.success = True
         response.message = '누적값 0 으로 초기화'
         self.get_logger().info('── reset ── 누적값 0')
@@ -211,14 +204,10 @@ class OdomCheck(Node):
         ekf_disp = math.hypot(self.ekf_x, self.ekf_y)
 
         lin_scale = self._ratio(self.raw_path, self.cmd_path)          # ① 선속도 스케일
-        rot_scale = self._ratio(self.raw_theta, self.imu_dyaw)         # ② 회전 스케일
 
         lin_txt = f'{lin_scale:5.3f}' if lin_scale is not None else '  -  '
-        rot_txt = f'{rot_scale:5.3f}' if rot_scale is not None else '  -  '
         ekf_line = (f'net={ekf_disp:6.3f} m  θ={deg(self.ekf_theta):7.2f}°'
                     if self.ekf_seen else '(수신 없음 — EKF 미기동?)')
-        imu_line = (f'yaw={deg(self.imu_yaw):7.2f}°  Δyaw={deg(self.imu_dyaw):7.2f}°'
-                    if self.imu_seen else '(수신 없음 — IMU 미기동?)')
 
         print('\n' + '─' * 62)
         print(f'CMD      v={self.cmd_v:+.3f} w={self.cmd_w:+.3f} | '
@@ -226,17 +215,16 @@ class OdomCheck(Node):
         print(f'ODOM_RAW v={self.raw_v:+.3f} | net={raw_disp:6.3f} m  '
               f'경로 {self.raw_path:6.3f} m  θ={deg(self.raw_theta):7.2f}°')
         print(f'EKF/odom {ekf_line}')
-        print(f'IMU      {imu_line}')
         print(f'  ① 선속도 스케일 raw_경로/cmd_경로 = {lin_txt}   (1.000 이면 정상)')
-        print(f'  ② 회전  스케일 raw_Δθ/imu_Δyaw    = {rot_txt}   (1.000 이면 정상)')
+        # 회전은 자동 비율이 없다 — ODOM_RAW 의 θ 를 실측 각도와 직접 비교한다.
+        print(f'  ② 회전 — 제자리 90° 회전 후 위 θ 를 90° 와 비교 '
+              f'(어긋나면 wheel_base 를 그 비율로 보정)')
 
         # rqt_plot 용 토픽 발행 (비율은 아직 못 구하면 0.0 으로)
         self.pub['lin_scale'].publish(Float64(data=lin_scale if lin_scale is not None else 0.0))
-        self.pub['rot_scale'].publish(Float64(data=rot_scale if rot_scale is not None else 0.0))
         self.pub['cmd_path'].publish(Float64(data=self.cmd_path))
         self.pub['raw_path'].publish(Float64(data=self.raw_path))
         self.pub['raw_theta_deg'].publish(Float64(data=deg(self.raw_theta)))
-        self.pub['imu_dyaw_deg'].publish(Float64(data=deg(self.imu_dyaw)))
 
 
 def main(args=None):

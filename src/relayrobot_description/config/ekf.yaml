@@ -1,51 +1,57 @@
+# EKF 설정 — 바퀴 오도메트리 단독 (IMU 미사용)
+#
+# ------------------------------------------------------------------
+# 2026-11-01 변경: IMU 를 파이프라인에서 제거했다.
+#
+#   구성은 "바퀴 엔코더 오도메트리 + 라이다" 두 개로 SLAM 까지 간다.
+#   IMU(EBIMU9DOFV5)는 쓰지 않는다 — 장치를 설치하지 않기로 결정했다.
+#
+#   이전 버전은 yaw 소스를 IMU 절대각 하나로 통일하고 바퀴에서는 vx 만 받는
+#   융합 설정이었다. 그 전략과 근거는 git 이력에 남아 있다:
+#       git show e67f0f6 -- src/relayrobot_description/config/ekf.yaml
+#   IMU 를 다시 도입할 일이 생기면 거기서 꺼내 쓸 것. 여기에 주석으로
+#   끌고 다니지 않는다 (RUNBOOK 8절: 본문을 고치고 덧붙이지 않는다).
+#
+# 그래서 지금 이 파일이 하는 일:
+#   /odom_raw (바퀴) 를 유일한 입력으로 받아 /odom 과 odom→base_link TF 를 낸다.
+#   실질적으로 패스스루 + 평활화에 가깝다. 센서가 하나라 "융합" 은 없다.
+#
+# 왜 EKF 를 아예 빼지 않는가 (중요):
+#   odom→base_link TF 를 발행하는 노드가 이것뿐이다. 드라이버
+#   (real_robot_driver_260519)는 TF 를 일부러 쏘지 않는다 — 이중 발행 방지.
+#   EKF 를 빼면 TF 사슬이 끊겨 Cartographer 가 돌지 않는다.
+#
+# 정확도 — SLAM 관점:
+#   바퀴만 쓰면 바퀴 슬립으로 yaw 가 서서히 드리프트한다. 이건 Cartographer 가
+#   매 프레임 scan 을 맵에 맞추면서 교정해 주는 종류의 오차다. EKF 는 전역
+#   정확도가 아니라 "국소적으로 매끄러운 prior" 만 책임지면 된다.
+#   단 바퀴가 헛도는 바닥(카펫·문턱·급회전)에서는 품질이 떨어진다.
+#   순항 속도 0.15 m/s 이상을 지킬 것 — 저속 헌팅이 prior 를 뚝뚝 끊는다.
+# ------------------------------------------------------------------
+
 ekf_filter_node:
   ros__parameters:
     frequency: 30.0
     two_d_mode: true
-    publish_tf: true
+    publish_tf: true          # odom→base_link 를 발행하는 유일한 노드다. 끄면 TF 가 끊긴다.
 
     # 프레임 설정
-    map_frame: map              # 나중에 SLAM 할 때 필요
+    map_frame: map              # map→odom 은 Cartographer 가 따로 발행한다
     odom_frame: odom            # 기준 좌표계
     base_link_frame: base_link  # 로봇 본체 좌표계
-    world_frame: odom           # 현재는 odom 기준
+    world_frame: odom           # odom 기준 (map 기준은 SLAM 담당)
 
-    # ------------------------------------------------------------------
-    # 융합 전략 (2026-08-22 변경)
-    #
-    #   방향(yaw) : IMU 절대 yaw 만 사용
-    #   위치(x,y) : 바퀴 속도(vx)를 IMU yaw 방향으로 적분
-    #
-    # 왜 바퀴의 절대 x,y 를 안 쓰나:
-    #   /odom_raw 의 x,y 는 "바퀴가 자기 yaw 로 적분한" 위치다.
-    #   바퀴 yaw 와 IMU yaw 가 어긋나면 두 값이 서로 밀고 당겨서
-    #   직진 중에도 궤적이 좌우로 흔들린다.
-    #   속도만 넘기고 방향은 IMU 에 맡기면 이 충돌이 사라진다.
-    #
-    # 왜 v_yaw(각속도)를 양쪽 다 껐나:
-    #   이 IMU 는 현재 자세(roll/pitch/yaw)만 출력하고 자이로 값을 안 준다.
-    #   바퀴 v_yaw 는 좌우 rpm 차이로 계산한 값이라 IMU yaw 와 경쟁하게 되므로
-    #   방향 소스를 IMU 하나로 통일한다.
-    # ------------------------------------------------------------------
-
-    # 1. 바퀴 오도메트리 (/odom_raw) — 속도만 사용
+    # ── 바퀴 오도메트리 (/odom_raw) — 유일한 입력 ──────────────────────────
     odom0: /odom_raw
-    odom0_config: [false, false, false, # x, y 위치 미사용 (IMU yaw 와 충돌)
-                   false, false, false, # roll, pitch, yaw (IMU에 양보)
+    odom0_config: [true,  true,  false, # x, y 사용
+                   false, false, true,  # yaw 사용 — 유일한 방향 소스
                    true,  true,  false, # vx 사용, vy=0 은 비홀로노믹 구속으로 유효
-                   false, false, false, # v_yaw 미사용 (방향은 IMU 담당)
-                   false, false, false]
+                   false, false, true,  # v_yaw 사용 (좌우 rpm 차에서 계산됨)
+                   false, false, false] # 선가속도 없음
+    odom0_differential: false   # 절대 pose 를 쓴다
     odom0_relative: false
 
-    # 2. EBIMU (/ebimu_data) — 절대 yaw 만 사용
-    imu0: /ebimu_data
-    imu0_config: [false, false, false, # x, y, z 위치 (IMU는 위치 못 잡음)
-                  false, false, true,  # Roll, Pitch 무시하고 'Yaw'만 사용
-                  false, false, false, # 속도 사용 안 함
-                  false, false, false, # v_yaw 미사용 (센서가 자이로를 안 줌)
-                  false, false, false] # 선가속도 (노이즈 심해 끔)
-
-    # IMU 설정 핵심 파라미터
-    imu0_differential: false # 절대 각도를 쓸 거면 false
-    imu0_relative: true      # 시작 시점의 각도를 0으로 잡으려면 true
-    imu0_remove_gravitational_acceleration: true # 가속도 쓸 경우 필수
+    # 센서가 하나뿐이라 pose 와 twist 를 같은 소스에서 함께 받는다.
+    # 같은 정보가 두 번 들어가 EKF 가 자신을 과신한다(공분산 과소평가).
+    # Cartographer 는 prior 의 공분산보다 pose 의 매끄러움을 보므로 실용상 문제없다.
+    # 공분산 자체를 쓰는 소비자를 붙일 때는 twist(7~9, 12번)를 끄는 것을 검토할 것.
